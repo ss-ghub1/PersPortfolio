@@ -1,0 +1,5 @@
+institution_id,native_account_code,account_label,base_currency,banking_relationship
+UBS,0546 00337340 0001,UBS Portfolio 1,SGD,0546 00337340
+UBS,0546 00337340 0002,UBS Portfolio 2,USD,0546 00337340
+UBS,0546 00337340 0003,UBS Portfolio 3,USD,0546 00337340
+UBS,0546 00337340 0004,UBS Portfolio 4 (direct equities - via proxy export),SGD,0546 00337340

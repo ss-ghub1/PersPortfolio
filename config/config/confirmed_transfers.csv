@@ -1,0 +1,4 @@
+account_id,trade_date,gross_amount,currency,destination_account_id,note
+UBS-0001,2026-06-18,-600000.0,SGD,UBS-0004,Confirmed by user: funded P04's opening (26 June 2026 mandate creation) along with the 2026-06-25 transfer
+UBS-0001,2026-06-25,-180000.0,SGD,UBS-0004,Confirmed by user: funded P04's opening (26 June 2026 mandate creation) along with the 2026-06-18 transfer
+UBS-0001,2026-07-03,-219941.57,SGD,UNKNOWN,User confirms a matching credit+debit pair for this amount across 30/6 and 3/7 (so internal in nature) but destination not identified - likely landed in a P01 currency sub-account we have no ledger for (GBP/HKD/JPY/CHF). Excluded from external cash flow, but not attributed to any specific account.

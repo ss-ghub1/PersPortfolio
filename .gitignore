@@ -1,0 +1,16 @@
+# Database - generated locally by run_monthly_load.py, never committed
+data/*.db
+data/*.db-journal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Generated output (Excel snapshots etc)
+output/
+
+# OS cruft
+.DS_Store

@@ -1,0 +1,38 @@
+priority,match_field,match_pattern,txn_type,txn_subtype
+10,label,Rectification UBS Advice,FEE,ADVISORY_FEE_REVERSAL
+10,label,Cancel UBS Advice,FEE,ADVISORY_FEE_REVERSAL
+20,label,UBS Advice,FEE,ADVISORY_FEE
+30,label,ADR HANDLING FEE,FEE,ADR_HANDLING_FEE
+40,label,Dividend,INCOME,DIVIDEND
+40,label,Cash dividend from optional dividend,INCOME,DIVIDEND
+40,label,Compensatory dividend payment,INCOME,DIVIDEND
+50,label,Stock Market Spot Purchase,BUY,MARKET_TRADE
+50,label,Purchase from issue with prepayment,BUY,FUND_SUBSCRIPTION
+50,label,Purchase from issue,BUY,FUND_SUBSCRIPTION
+50,label,Prepayment for fund subscription,BUY,FUND_SUBSCRIPTION
+50,label,Prepayment for subscription,BUY,FUND_SUBSCRIPTION
+60,label,Stock Market Spot Sale,SELL,MARKET_TRADE
+60,label,Sale from issue,SELL,FUND_REDEMPTION
+60,label,Sale Spot,SELL,MARKET_TRADE
+70,label,Purchase FX Forward,FX_CONVERSION,FX_FORWARD
+70,label,You bought,FX_CONVERSION,FX_SPOT
+70,label,You sold,FX_CONVERSION,FX_SPOT
+80,label,Incoming from Securities Transfer,TRANSFER,SECURITIES_TRANSFER_IN
+80,label,Outgoing from Securities Transfer,TRANSFER,SECURITIES_TRANSFER_OUT
+80,label,Title shift outgoing securities to block,TRANSFER,CUSTODY_BLOCK
+80,label,Incoming securities from title shift entry blocked,TRANSFER,CUSTODY_BLOCK
+80,label,Securities change speciality,TRANSFER,CUSTODY_RECLASSIFICATION
+80,label,Issue without claim,TRANSFER,CUSTODY_RECLASSIFICATION
+80,label,transfer block code,TRANSFER,CUSTODY_BLOCK
+80,label,Exchange of Security,TRANSFER,SECURITIES_EXCHANGE
+80,label,delivery without payment,TRANSFER,FREE_DELIVERY
+90,label,Reversal,REVERSAL,GENERAL_REVERSAL
+95,label,United Overseas Bank,DEPOSIT,EXTERNAL_BANK_TRANSFER
+100,label,Special payment order,TRANSFER,INTERNAL_TRANSFER_UNMATCHED
+101,label,GOOD WILL,CASH_MOVEMENT,GOODWILL_CREDIT
+101,label,Balance brought forward,CASH_MOVEMENT,OPENING_BALANCE
+101,label,Balance closing of service prices,FEE,SERVICE_FEE
+101,label,Carry out securities receipt without payment,TRANSFER,CUSTODY_RECLASSIFICATION
+101,label,entry,CASH_MOVEMENT,NEEDS_REVIEW
+110,label,order,TRANSFER,INTERNAL_TRANSFER_UNMATCHED
+120,label,credit,CASH_MOVEMENT,NEEDS_REVIEW
