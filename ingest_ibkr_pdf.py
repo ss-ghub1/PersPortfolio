@@ -104,7 +104,7 @@ def _parse_open_positions(text):
 
 def _parse_forex_balances(text):
     rows = []
-    m = re.search(r"Forex Balances\n(.*?)\nNet Stock Position Summary", text, re.S)
+    m = re.search(r"Forex Balances\n(.*?)\n(?:Net Stock Position Summary|Trades\n)", text, re.S)
     if not m:
         return rows
     block = m.group(1)
@@ -187,7 +187,7 @@ def _parse_transfers(text):
 def _parse_cash_report(text):
     """Returns {currency: {category: amount}}."""
     out = {}
-    m = re.search(r"\nCash Report\n(.*?)\nOpen Positions", text, re.S)
+    m = re.search(r"\nCash Report\n(.*?)\n(?:Open Positions|Forex Balances|Net Stock Position Summary)", text, re.S)
     if not m:
         return out
     block = m.group(1)
@@ -232,20 +232,42 @@ def _parse_deposits_withdrawals(text):
     return rows
 
 
+def _fix_deposit_currencies(deposits_withdrawals, cash_report):
+    """The Deposits & Withdrawals section sits in a two-column page layout
+    next to Interest Accruals, and text extraction interleaves the two -
+    the currency header can end up merged onto an unrelated Interest
+    Accruals line, making it unreliable to read directly. Cross-referencing
+    each entry's amount against the Cash Report (which IS single-column and
+    parses cleanly) is more robust than parsing the raw layout."""
+    for d in deposits_withdrawals:
+        for ccy, cats in cash_report.items():
+            for cat in ("Deposits", "Account Transfers"):
+                val = cats.get(cat)
+                if val is not None and abs(val - d["amount"]) < 0.01:
+                    d["currency"] = ccy
+                    break
+            else:
+                continue
+            break
+    return deposits_withdrawals
+
+
 def parse_statement(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         pages = [p.extract_text() or "" for p in pdf.pages]
 
     accounts = {}
     for code, text in _account_sections(pages):
+        cash_report = _parse_cash_report(text)
+        deposits_withdrawals = _fix_deposit_currencies(_parse_deposits_withdrawals(text), cash_report)
         accounts[code] = {
             "nav_walk": _parse_nav_walk(text),
             "open_positions": _parse_open_positions(text),
             "forex_balances": _parse_forex_balances(text),
             "trades": _parse_trades(text),
             "transfers": _parse_transfers(text),
-            "cash_report": _parse_cash_report(text),
-            "deposits_withdrawals": _parse_deposits_withdrawals(text),
+            "cash_report": cash_report,
+            "deposits_withdrawals": deposits_withdrawals,
         }
 
     m = re.search(r"([A-Za-z]+ \d{1,2}, \d{4}) - ([A-Za-z]+ \d{1,2}, \d{4})", pages[0])
