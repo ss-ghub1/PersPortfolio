@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PersPortfolio{% if page_label %} - {{ page_label }}{% endif %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <div class="brand">PersPortfolio</div>
+    <nav>
+      {% for slug, label in nav_pages %}
+        <a href="{{ url_for(slug) }}{% if current_owner %}?owner={{ current_owner }}{% endif %}"
+           class="{{ 'active' if active_page == slug else '' }}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <div class="owner-toggle">
+      <a href="?{{ '' }}" class="{{ 'active' if not current_owner else '' }}">Consolidated</a>
+      {% for o in owners %}
+        <a href="?owner={{ o }}" class="{{ 'active' if current_owner == o else '' }}">{{ o }}</a>
+      {% endfor %}
+    </div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
