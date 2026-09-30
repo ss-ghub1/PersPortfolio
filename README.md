@@ -181,6 +181,32 @@ own Main/Total Balance and cash brought-forward/carried-forward figures.
 python3 ingest_cdp_pdf.py /path/to/statement.pdf --load
 ```
 
+**IBKR** (2 accounts: `U20780831` individual, `U21032806` joint - both in
+one PDF) - a real text-layer PDF like CDP. Handled by `ingest_ibkr_pdf.py`.
+Notable things specific to this one:
+- IBKR gives its own TWR per account directly (like UBS), and a "Change in
+  NAV" walk (Starting + Mark-to-Market + Deposits & Withdrawals + Position
+  Transfers + Interest + Commissions + Sales Tax + FX = Ending) that's the
+  reconciliation gate here.
+- Internal transfers between the two accounts name the destination account
+  number directly in the text - no fuzzy amount/date matching needed,
+  unlike UBS's internal-transfer detection.
+- The "Deposits & Withdrawals" section sits in a two-column page layout
+  next to "Interest Accruals", and naive text extraction interleaves the
+  two - a raw currency header can end up merged onto an unrelated line.
+  Fixed by cross-referencing each entry's amount against the Cash Report
+  (which IS single-column) rather than trusting the interleaved layout
+  directly - worth remembering if a future statement's layout shifts again.
+- The NAV table's "Interest Accruals" component is a real, if small, part
+  of NAV that isn't in Open Positions or Forex Balances - loaded as its
+  own cash-like position row. Missing this once caused both accounts to be
+  short by exactly that amount despite the reconciliation gate passing -
+  a reminder that the gate validates the *source's* arithmetic, not that
+  every component of it actually got written to the database.
+```bash
+python3 ingest_ibkr_pdf.py /path/to/statement.pdf --load
+```
+
 ## Extending to a new institution
 
 Two paths, depending on what that institution actually offers:
@@ -198,18 +224,138 @@ Two paths, depending on what that institution actually offers:
 
 Either way: add the institution's account(s) to `config/accounts.csv` first.
 
-## Not built yet (next steps)
+## Skip-if-already-loaded, and --force
 
-- Institution #4 (your one remaining investment account - UBS, Endowus
-  and CDP are done).
-- Asset class labels differ by institution (UBS says "Equities - Equity
-  investments", CDP says "Equities", Endowus says "Equity Fund" - all
-  the same underlying category). Not yet normalized into one taxonomy;
-  currently shows as separate rows in the asset allocation report.
-- A front end / dashboard for browsing all of this visually (the Excel
-  snapshot from `export_excel.py` is the interim option).
-- Display polish in `performance.py`: the Endowus period return is stored
-  but not yet printed in the report, and the report header still says
-  "UBS's own statement TWR" for every account.
-- Upgrading `db.py` to SQLAlchemy if/when you want a Postgres option - the
-  schema is already portable SQL, so this is a low-cost future step.
+Every ingester (`ingest_positions.py`, `ingest_transactions.py`,
+`ingest_endowus_pdf.py`, `ingest_cdp_pdf.py`, `ingest_ibkr_pdf.py`) checks
+whether a file with this exact filename has already been loaded (via
+`db.is_source_file_loaded()`) and skips - printing a clear message - unless
+`--force` is passed. For Endowus this also skips the slow OCR step
+entirely, not just the database write. `run_monthly_load.py --force`
+passes through to both the positions and transactions loaders.
+
+This means re-running last month's command by accident is now safe. It
+does NOT mean position loading was always safe to repeat - see the next
+section for why that used to double your numbers.
+
+## A real bug we hit for real: position loading was not idempotent
+
+Loading the same position snapshot twice used to silently double every
+account's value - nothing cleared the old snapshot before inserting the
+new one, unlike `txn` (which dedupes via a unique key). This actually
+happened during setup on a different machine and produced exactly-2x
+totals across all 4 UBS accounts, which is how it was found.
+
+Fixed in all four position-writing loaders (`ingest_positions.py`,
+`ingest_endowus_pdf.py`, `ingest_cdp_pdf.py`, `ingest_ibkr_pdf.py`): each
+now deletes any existing `position_snapshot` rows for the
+`(account_id, as_of_date)` it's about to write, before inserting. Verified
+for all four by deliberately reloading with `--force` and confirming row
+counts and totals matched pre-reload exactly, not doubled - this was
+caught live for IBKR specifically (140,897.98 -> 281,795.96 before the fix,
+confirming the bug was real, not hypothetical).
+
+**Takeaway for any future loader**: a reconciliation gate validates the
+*source's* arithmetic (e.g. IBKR's NAV walk, Endowus's cash balance) - it
+says nothing about whether re-running the same load duplicates what's
+already in the database. Both protections are needed, separately.
+
+## Web app (Phase 1: Flask, server-rendered)
+
+`app.py` + `reports.py` + `templates/`. Run with `python3 app.py`, open
+`http://localhost:5000`. Refresh after each reload - no rebuild step.
+
+Design choice made deliberately for a clean Phase 2: `reports.py`'s
+functions return plain dicts, not HTML - `app.py`'s routes render
+templates around them. When Phase 2 adds an interactive JS layer, it can
+call the same functions and `jsonify()` the result instead, with no
+duplicated query logic.
+
+**Built so far:** Overview page only (value by account, asset allocation,
+last-loaded date per institution). The other 6 nav items (Positions,
+Transactions, Fees, Income, Performance, Data Health) are wired into the
+nav bar as placeholder pages, not yet built.
+
+**Ownership toggle**: Consolidated / SS / SV, via `?owner=` query param.
+Backed by `config/account_ownership.json` - **explicit config only, never
+inferred** from a statement's own labels (UBS's "AND/OR" wording and
+Endowus's account name "Joint" are NOT ownership evidence, per an explicit
+design decision). An account missing from that file is excluded from an
+owner's view (not zero-filled, not defaulted) and surfaced as a visible
+warning banner - check `reports.get_account_values()` /
+`get_asset_allocation()` if extending this pattern to a new page.
+
+**Display identifiers** (`account.display_code` in the schema, populated
+from `config/accounts.csv`): the UI shows real institution identifiers
+(e.g. `546-337340-01`) while the internal `account_id` stays `UBS-0001`
+under the hood - deliberately NOT renamed, to avoid touching the
+already-reconciled pipeline. Full rename to real identifiers as the
+internal ID is a deferred decision (see to-do list) - Option A (display
+only) is what's built; Option B (rename the actual ID) is not.
+
+**Funding source** (`account.funding_source`, e.g. `CASH`): account-level
+for now. Every account currently loaded is `CASH`. Endowus Single (not yet
+ingested) will be funded by CPF/SRS - if it turns out to mix sources within
+one account, this may need to move to position-level, matching what
+Endowus's own statement already gives us per-goal (currently parsed but
+discarded during ingestion, since every goal in the Joint account happened
+to read "SGD Cash").
+
+## Current status snapshot
+
+4 institutions, 8 accounts, all reconciled: UBS (4), Endowus (1), CDP (1),
+IBKR (2). Total ~4,367,009 SGD as of the last full load (July 2026
+statements). Review queue empty across all institutions.
+
+Git repo `PersPortfolio` pushed to `github.com/ss-ghub1/PersPortfolio`,
+`main` branch. When syncing changes from this project to your local clone,
+copy only the changed files (preserving paths) rather than re-unzipping
+the whole project - a fresh `.git` folder has no remote configured, and
+overwriting your existing `.git` loses it, requiring `git remote add
+origin ...` again.
+
+## Not built yet (next steps, roughly in order)
+
+1. **Directory-based ingestion wrapper** (agreed design, not yet built):
+   point at an input folder; it detects which parser each file needs by
+   *content signature*, not filename (sniff xlsl/csv headers the way
+   `ingest_transactions.py` already does internally for its own tab
+   dispatch; sniff PDF text for institution-distinctive strings - "UBS AG"
+   + "Portfolio number" for UBS, "InteractiveBrokers" + "Activity
+   Statement" for IBKR, "Central Depository" for CDP, Endowus's own
+   branding text after OCR for Endowus); determines the covered month from
+   the statement's own content (already true for every PDF loader); skips
+   files already loaded (now trivial - reuses `is_source_file_loaded()`
+   directly). Flagged risk to keep in mind when building this: don't
+   detect Endowus by "OCR found no text layer" - that shortcut breaks the
+   moment a second scanned-PDF institution exists. Use explicit branding-
+   text matching for every institution, including Endowus, from the start.
+2. **Web app: Positions page.**
+3. **Web app: Transactions page** (filterable by type and date range).
+4. **Web app: Fees, Income, Performance, Data Health pages.**
+5. Institution #4 remaining data: Endowus Single (SS, funded by CPF/SRS)
+   and CDP 9563 (SV) - both identified, neither ingested yet.
+6. `ingest_transactions.py`: currently only warns (doesn't fail loudly) on
+   a sheet that doesn't match any known tab format - a wrong file can
+   silently "succeed" with 0 rows loaded rather than erroring. Fix to fail
+   loudly instead.
+7. Overview page polish: sort accounts by institution then account number
+   (currently alphabetical by internal ID, which doesn't order UBS 1-4
+   correctly); Endowus Joint's display label shouldn't show the email
+   address.
+8. Asset class labels differ by institution (UBS: "Equities - Equity
+   investments", CDP: "Equities", Endowus: "Equity Fund") - not normalized
+   into one taxonomy; shows as separate rows in asset allocation today.
+9. `performance.py`: the Endowus period return is computed and stored but
+   not yet printed in the CLI report; the report header text still says
+   "UBS's own statement TWR" for every account regardless of institution.
+10. **Deferred, larger decisions** (do once the basic web app design is
+    proven out, not before):
+    - Rename internal account IDs to real institution identifiers
+      (Option B) - touches `accounts.csv`, `account_alias.csv`,
+      `confirmed_transfers.csv`, needs full re-reconciliation after.
+    - Interactive dashboard (Phase 2): JS charting layer on the same
+      Flask backend, additive per the `reports.py` design above, not a
+      rewrite.
+    - Upgrading `db.py` to SQLAlchemy for a Postgres option - schema is
+      already portable SQL, low-cost whenever it's wanted.

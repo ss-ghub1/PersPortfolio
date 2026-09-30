@@ -19,7 +19,7 @@ from pathlib import Path
 
 import openpyxl
 
-from db import get_connection, resolve_account_id
+from db import get_connection, resolve_account_id, is_source_file_loaded
 from classify import classify
 from ingest_positions import _upsert_instrument  # reuse instrument upsert
 
@@ -237,10 +237,17 @@ def _parse_cash_leg_sheet(ws, source_file, conn):
 
 
 # ---------------------------------------------------------------------------
-def load_transactions(path: Path, conn: sqlite3.Connection = None):
+def load_transactions(path: Path, conn: sqlite3.Connection = None, force: bool = False):
     own_conn = conn is None
     conn = conn or get_connection()
     path = Path(path)
+
+    source_file = path.name
+    if not force and is_source_file_loaded(conn, "txn", source_file):
+        print(f"[transactions] SKIPPED: '{source_file}' already loaded (use --force to reload anyway)")
+        if own_conn:
+            conn.close()
+        return 0
 
     n_loaded, n_dupe_or_error, n_skipped_no_account = 0, 0, 0
 
@@ -329,4 +336,5 @@ def _insert_txn(conn, account_id, rec):
 
 if __name__ == "__main__":
     import sys
-    load_transactions(Path(sys.argv[1]))
+    force = "--force" in sys.argv
+    load_transactions(Path(sys.argv[1]), force=force)

@@ -130,6 +130,17 @@ def load_ownership() -> dict:
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
+def is_source_file_loaded(conn: sqlite3.Connection, table: str, source_file: str) -> bool:
+    """True if any row in `table` already has this source_file. Used by every
+    ingester to skip a file that's already been loaded, rather than silently
+    re-processing (and for position-writing loaders, re-inserting) it. table
+    must be 'position_snapshot' or 'txn' - never build this string from
+    untrusted input."""
+    assert table in ("position_snapshot", "txn"), f"unexpected table: {table}"
+    row = conn.execute(f"SELECT 1 FROM {table} WHERE source_file=? LIMIT 1", (source_file,)).fetchone()
+    return row is not None
+
+
 def resolve_account_id(conn: sqlite3.Connection, institution_id: str, raw_identifier: str,
                         alias_type: str = None) -> str | None:
     """Looks up account_id for a raw identifier seen in a cash-ledger tab

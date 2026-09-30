@@ -15,7 +15,7 @@ from pathlib import Path
 
 import openpyxl
 
-from db import get_connection, _clean_account_id, resolve_account_id
+from db import get_connection, _clean_account_id, resolve_account_id, is_source_file_loaded
 
 COMMON_LEN = 23  # columns 0..22 identical in both header variants
 
@@ -173,19 +173,48 @@ _CONN = None  # set by load_positions so the generator can upsert instruments in
 _FX_RATES = []  # (as_of_date, from_ccy, to_ccy, rate, source_file) collected during parsing
 
 
-def load_positions(path: Path, conn: sqlite3.Connection = None):
+def load_positions(path: Path, conn: sqlite3.Connection = None, force: bool = False):
     global _CONN, _FX_RATES
     own_conn = conn is None
     conn = conn or get_connection()
+
+    source_file = Path(path).name
+    if not force and is_source_file_loaded(conn, "position_snapshot", source_file):
+        print(f"[positions] SKIPPED: '{source_file}' already loaded (use --force to reload anyway)")
+        if own_conn:
+            conn.close()
+        return 0
+
     _CONN = conn
     _FX_RATES = []
 
-    n_loaded, n_skipped_no_account = 0, 0
+    # Resolve account_id for every record first (single pass), so we know
+    # exactly which (account_id, as_of_date) snapshots this load will touch
+    # BEFORE inserting anything.
+    n_skipped_no_account = 0
+    records = []
     for rec in parse_position_file(path):
         account_id = resolve_account_id(conn, "UBS", rec["native_account_code"], alias_type="PORTFOLIO_CODE")
         if not account_id:
             n_skipped_no_account += 1
             continue
+        rec["account_id"] = account_id
+        records.append(rec)
+
+    # Idempotency: clear any existing snapshot for each (account_id, as_of_date)
+    # this load covers before inserting, so accidentally running the same load
+    # twice replaces the snapshot instead of doubling every position - this
+    # bit us for real (see commit history) when a snapshot got loaded twice
+    # and every account total came out exactly 2x.
+    touched = {(r["account_id"], r["as_of_date"]) for r in records}
+    for account_id, as_of_date in touched:
+        conn.execute(
+            "DELETE FROM position_snapshot WHERE account_id=? AND as_of_date=?",
+            (account_id, as_of_date),
+        )
+
+    n_loaded = 0
+    for rec in records:
         conn.execute(
             """INSERT INTO position_snapshot
                  (account_id, instrument_id, is_cash, as_of_date, position_currency,
@@ -194,7 +223,7 @@ def load_positions(path: Path, conn: sqlite3.Connection = None):
                   accrued_interest, pct_of_portfolio, source_file)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                account_id, rec["instrument_id"], int(rec["is_cash"]), rec["as_of_date"],
+                rec["account_id"], rec["instrument_id"], int(rec["is_cash"]), rec["as_of_date"],
                 rec["position_currency"], rec["quantity"], rec["cost_price"],
                 rec["cost_value_native"], rec["market_price"], rec["market_value_native"],
                 rec["market_value_base"], rec["unrealized_pl_pct"], rec["accrued_interest"],
@@ -203,6 +232,7 @@ def load_positions(path: Path, conn: sqlite3.Connection = None):
         )
         n_loaded += 1
     conn.commit()
+    print(f"[positions] cleared {len(touched)} existing (account, as_of_date) snapshot(s) before reload")
     print(f"[positions] loaded {n_loaded} rows, skipped {n_skipped_no_account} "
           f"(unknown account_id - add to config/accounts.csv)")
 
@@ -227,4 +257,5 @@ def load_positions(path: Path, conn: sqlite3.Connection = None):
 
 if __name__ == "__main__":
     import sys
-    load_positions(Path(sys.argv[1]))
+    force = "--force" in sys.argv
+    load_positions(Path(sys.argv[1]), force=force)

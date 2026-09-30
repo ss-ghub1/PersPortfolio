@@ -29,6 +29,8 @@ from pathlib import Path
 
 import pdfplumber
 
+from db import is_source_file_loaded
+
 NUM = r"[\d,]+(?:\.\d+)?"
 
 
@@ -168,7 +170,12 @@ def parse_statement(pdf_path):
 
 
 # ---------------------------------------------------------------------------
-def load_cdp_statement(pdf_path, conn, account_native_code="CDP 0388"):
+def load_cdp_statement(pdf_path, conn, account_native_code="CDP 0388", force=False):
+    source_file = Path(pdf_path).name
+    if not force and is_source_file_loaded(conn, "position_snapshot", source_file):
+        print(f"[cdp] SKIPPED: '{source_file}' already loaded (use --force to reload anyway)")
+        return None
+
     parsed = parse_statement(pdf_path)
     source_file = parsed["source_file"]
     summ = parsed["summary"]
@@ -217,6 +224,10 @@ def load_cdp_statement(pdf_path, conn, account_native_code="CDP 0388"):
     on_loan_by_name = {l["name"]: l for l in parsed["on_loan"]}
 
     n_positions = 0
+    conn.execute(
+        "DELETE FROM position_snapshot WHERE account_id=? AND as_of_date=?",
+        (account_id, parsed["as_of_date"]),
+    )
     for h in parsed["holdings"]:
         instrument_id = f"CDP:{h['name']}"
         conn.execute(
@@ -297,7 +308,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[2] == "--load":
         from db import get_connection
         conn = get_connection()
-        load_cdp_statement(sys.argv[1], conn)
+        force = "--force" in sys.argv
+        load_cdp_statement(sys.argv[1], conn, force=force)
         conn.close()
     else:
         import json

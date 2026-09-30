@@ -25,12 +25,25 @@ load_endowus_statement() - they're what make this safe to rely on despite
 the OCR risk. A statement that fails reconciliation should be treated as
 unparsed, not silently loaded.
 """
+import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 
 import pypdfium2 as pdfium
 import pytesseract
+
+from db import is_source_file_loaded
+
+# On Windows, the Tesseract OCR engine (a separate install from the
+# pytesseract Python wrapper) often isn't on PATH even after installing.
+# Fall back to the default install location rather than requiring the user
+# to get PATH exactly right.
+if os.name == "nt" and not shutil.which("tesseract"):
+    _default_win_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if os.path.exists(_default_win_path):
+        pytesseract.pytesseract.tesseract_cmd = _default_win_path
 
 MONTHS = {m: i + 1 for i, m in enumerate(
     ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))}
@@ -334,7 +347,13 @@ def modified_dietz(bmv, emv, flows, period_start, period_end):
 
 
 # ---------------------------------------------------------------------------
-def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint"):
+def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint", force=False):
+    source_file = Path(pdf_path).name
+    if not force and is_source_file_loaded(conn, "position_snapshot", source_file):
+        print(f"[endowus] SKIPPED: '{source_file}' already loaded (use --force to reload anyway) "
+              f"- OCR not re-run.")
+        return None
+
     parsed = parse_statement(pdf_path)
     source_file = parsed["source_file"]
 
@@ -378,6 +397,10 @@ def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint"):
     # the per-goal detail - not AGG_ALLOCATION, which repeats the same
     # holdings in a combined table and would double-count if also loaded) ---
     n_positions = 0
+    conn.execute(
+        "DELETE FROM position_snapshot WHERE account_id=? AND as_of_date=?",
+        (account_id, parsed["period_end"]),
+    )
     for row in parsed["allocations"]:
         if row["source"] != "GOAL_ALLOCATION" or not row["value"]:
             continue
@@ -499,7 +522,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[2] == "--load":
         from db import get_connection
         conn = get_connection()
-        load_endowus_statement(sys.argv[1], conn)
+        force = "--force" in sys.argv
+        load_endowus_statement(sys.argv[1], conn, force=force)
         conn.close()
     else:
         r = parse_statement(sys.argv[1])

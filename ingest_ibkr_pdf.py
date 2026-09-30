@@ -32,6 +32,8 @@ from pathlib import Path
 
 import pdfplumber
 
+from db import is_source_file_loaded
+
 NUM = r"-?[\d,]+\.\d{2}"
 
 
@@ -293,9 +295,14 @@ def _fx_rate_to_sgd(currency, forex_balances):
     return None
 
 
-def load_ibkr_statement(pdf_path, conn, account_native_codes=None):
+def load_ibkr_statement(pdf_path, conn, account_native_codes=None, force=False):
     """Loads every account found in the PDF (or just account_native_codes,
     if given). Returns {account_code: result_dict or None-if-aborted}."""
+    source_file = Path(pdf_path).name
+    if not force and is_source_file_loaded(conn, "position_snapshot", source_file):
+        print(f"[ibkr] SKIPPED: '{source_file}' already loaded (use --force to reload anyway)")
+        return {}
+
     parsed = parse_statement(pdf_path)
     source_file = parsed["source_file"]
     results = {}
@@ -346,6 +353,10 @@ def _load_one_ibkr_account(conn, native_code, data, source_file, period):
 
     as_of_date = period.get("end")
     n_positions = 0
+    conn.execute(
+        "DELETE FROM position_snapshot WHERE account_id=? AND as_of_date=?",
+        (account_id, as_of_date),
+    )
 
     # Stock positions - value is in native currency; convert to SGD via the
     # matching currency's FX rate from Forex Balances (that rate is IBKR's
@@ -488,7 +499,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[2] == "--load":
         from db import get_connection
         conn = get_connection()
-        load_ibkr_statement(sys.argv[1], conn)
+        force = "--force" in sys.argv
+        load_ibkr_statement(sys.argv[1], conn, force=force)
         conn.close()
     else:
         r = parse_statement(sys.argv[1])
