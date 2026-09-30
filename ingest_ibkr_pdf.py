@@ -72,6 +72,9 @@ def _parse_nav_walk(text):
         m = re.search(rf"{re.escape(f)}\s+({NUM})", text)
         if m:
             out[f] = _f(m.group(1))
+    m = re.search(rf"Interest Accruals\s+{NUM}\s+{NUM}\s+{NUM}\s+({NUM})\s+{NUM}", text)
+    if m:
+        out["interest_accruals_ending"] = _f(m.group(1))
     return out
 
 
@@ -280,8 +283,213 @@ def parse_statement(pdf_path):
     return {"accounts": accounts, "period": period, "source_file": Path(pdf_path).name}
 
 
+# ---------------------------------------------------------------------------
+def _fx_rate_to_sgd(currency, forex_balances):
+    if currency == "SGD":
+        return 1.0
+    for fb in forex_balances:
+        if fb["currency"] == currency:
+            return fb["close_price"]
+    return None
+
+
+def load_ibkr_statement(pdf_path, conn, account_native_codes=None):
+    """Loads every account found in the PDF (or just account_native_codes,
+    if given). Returns {account_code: result_dict or None-if-aborted}."""
+    parsed = parse_statement(pdf_path)
+    source_file = parsed["source_file"]
+    results = {}
+
+    for code, data in parsed["accounts"].items():
+        if account_native_codes and code not in account_native_codes:
+            continue
+        results[code] = _load_one_ibkr_account(conn, code, data, source_file, parsed["period"])
+    return results
+
+
+def _load_one_ibkr_account(conn, native_code, data, source_file, period):
+    nav = data["nav_walk"]
+
+    # --- Reconciliation gate: the NAV walk must sum to the stated ending
+    # value. This is IBKR's own accounting identity, not ours - refuse to
+    # load if it doesn't hold. ---
+    walk_fields = ["Starting Value", "Mark-to-Market", "Deposits & Withdrawals", "Position Transfers",
+                   "Change in Interest Accruals", "Commissions", "Sales Tax", "Other FX Translations"]
+    if not all(f in nav for f in walk_fields) or "Ending Value" not in nav:
+        print(f"[ibkr] ABORT {native_code}: NAV walk incomplete - {nav}")
+        return None
+    computed_ending = round(sum(nav[f] for f in walk_fields), 2)
+    stated_ending = round(nav["Ending Value"], 2)
+    if abs(computed_ending - stated_ending) > 0.02:
+        print(f"[ibkr] ABORT {native_code}: NAV walk does not reconcile "
+              f"(computed={computed_ending}, stated={stated_ending}) - not loading.")
+        return None
+    print(f"[ibkr] Reconciliation OK {native_code}: NAV walk sums to {computed_ending} "
+          f"(matches stated {stated_ending})")
+
+    account_id = conn.execute(
+        "SELECT account_id FROM account WHERE institution_id='IBKR' AND native_account_code=?",
+        (native_code,),
+    ).fetchone()
+    if not account_id:
+        print(f"[ibkr] ABORT {native_code}: no account configured - add it to config/accounts.csv first.")
+        return None
+    account_id = account_id["account_id"]
+
+    conn.execute(
+        """INSERT INTO reconciliation_log
+             (account_id, scope, period_start, period_end, expected_value, actual_value, difference, status, notes)
+           VALUES (?, 'IBKR_NAV_WALK', ?, ?, ?, ?, ?, 'OK', ?)""",
+        (account_id, period.get("start"), period.get("end"), stated_ending, computed_ending,
+         round(computed_ending - stated_ending, 2), f"NAV walk reconciles (source: {source_file})"),
+    )
+
+    as_of_date = period.get("end")
+    n_positions = 0
+
+    # Stock positions - value is in native currency; convert to SGD via the
+    # matching currency's FX rate from Forex Balances (that rate is IBKR's
+    # own, so this stays consistent with how they valued everything else).
+    for p in data["open_positions"]:
+        instrument_id = f"IBKR:{p['symbol']}"
+        conn.execute(
+            """INSERT INTO instrument (instrument_id, name, asset_class, instrument_currency)
+               VALUES (?, ?, 'Equities', ?)
+               ON CONFLICT(instrument_id) DO UPDATE SET
+                 asset_class=COALESCE(instrument.asset_class, excluded.asset_class)""",
+            (instrument_id, p["symbol"], p["currency"]),
+        )
+        rate = _fx_rate_to_sgd(p["currency"], data["forex_balances"])
+        mv_sgd = p["value"] * rate if rate else None
+        conn.execute(
+            """INSERT INTO position_snapshot
+                 (account_id, instrument_id, is_cash, as_of_date, position_currency,
+                  quantity, cost_price, market_price, market_value_native, market_value_base, source_file)
+               VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (account_id, instrument_id, as_of_date, p["currency"], p["quantity"],
+             p["cost_price"], p["close_price"], p["value"], mv_sgd, source_file),
+        )
+        n_positions += 1
+
+    # Cash by currency (Forex Balances) - value_sgd is already given directly,
+    # no conversion needed, and it's the more precise source for cash.
+    for fb in data["forex_balances"]:
+        conn.execute(
+            """INSERT INTO position_snapshot
+                 (account_id, instrument_id, is_cash, as_of_date, position_currency,
+                  quantity, market_price, market_value_base, source_file)
+               VALUES (?, NULL, 1, ?, ?, ?, ?, ?, ?)""",
+            (account_id, as_of_date, fb["currency"], fb["quantity"],
+             fb["close_price"], fb["value_sgd"], source_file),
+        )
+        n_positions += 1
+
+    # Interest accruals - a real component of NAV (Cash + Stock + Interest
+    # Accruals = Total per IBKR's own table) that isn't in either Open
+    # Positions or Forex Balances - load it as its own cash-like row so the
+    # account's total position value actually matches the statement's NAV.
+    if nav.get("interest_accruals_ending"):
+        conn.execute(
+            """INSERT INTO position_snapshot
+                 (account_id, instrument_id, is_cash, as_of_date, position_currency,
+                  market_value_base, source_file)
+               VALUES (?, NULL, 1, ?, 'SGD', ?, ?)""",
+            (account_id, as_of_date, nav["interest_accruals_ending"], source_file),
+        )
+        n_positions += 1
+
+    # SECURITY leg: trades
+    n_sec = 0
+    for i, t in enumerate(data["trades"]):
+        instrument_id = f"IBKR:{t['symbol']}"
+        txn_type = "SELL" if t["quantity"] < 0 else "BUY"
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO txn
+                 (account_id, instrument_id, source_leg, trade_date, txn_type,
+                  currency, quantity, price, gross_amount, fee_amount, realized_pl,
+                  raw_txn_type_label, source_reference, source_file)
+               VALUES (?, ?, 'SECURITY', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (account_id, instrument_id, t["trade_date"], txn_type, t["currency"],
+             t["quantity"], t["trade_price"], t["proceeds"], t["commission"], t["realized_pl"],
+             "Trade", f"{source_file}:{native_code}:TRADE:{i}", source_file),
+        )
+        n_sec += cur.rowcount
+
+    # SECURITY leg: security transfers (in/out of the account, not cash)
+    for i, t in enumerate(data["transfers"]):
+        instrument_id = f"IBKR:{t['symbol']}"
+        if t["transfer_type"] == "Internal":
+            subtype = f"INTERNAL_TRANSFER_{t['direction'].upper()}_{t['xfer_account']}"
+        else:
+            subtype = f"EXTERNAL_SECURITIES_TRANSFER_{t['direction'].upper()}"
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO txn
+                 (account_id, instrument_id, source_leg, trade_date, txn_type, txn_subtype,
+                  currency, quantity, gross_amount, raw_txn_type_label, raw_description,
+                  source_reference, source_file)
+               VALUES (?, ?, 'SECURITY', ?, 'TRANSFER', ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (account_id, instrument_id, t["trade_date"], subtype, t["currency"],
+             t["quantity"], t["market_value"], f"{t['transfer_type']} {t['direction']}",
+             f"Xfer account/company: {t['xfer_account']}",
+             f"{source_file}:{native_code}:XFER:{i}", source_file),
+        )
+        n_sec += cur.rowcount
+
+    # CASH leg: real dated deposits/withdrawals/internal-transfers
+    n_cash = 0
+    for i, d in enumerate(data["deposits_withdrawals"]):
+        if d["counterparty_account"]:
+            txn_type, subtype = "TRANSFER", f"INTERNAL_TRANSFER_TO_{d['counterparty_account']}"
+        else:
+            txn_type, subtype = ("DEPOSIT", "EXTERNAL_INCOMING") if d["amount"] > 0 else \
+                                 ("WITHDRAWAL", "EXTERNAL_OUTGOING")
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO txn
+                 (account_id, instrument_id, source_leg, trade_date, txn_type, txn_subtype,
+                  currency, gross_amount, raw_description, source_reference, source_file)
+               VALUES (?, NULL, 'CASH', ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (account_id, d["trade_date"], txn_type, subtype, d["currency"], d["amount"],
+             d["description"], f"{source_file}:{native_code}:DW:{i}", source_file),
+        )
+        n_cash += cur.rowcount
+
+    # CASH leg: fee/tax/fx categories from Cash Report (aggregated - IBKR
+    # gives period totals here, not per-event detail). Deliberately skip
+    # "Deposits"/"Account Transfers" (already loaded, dated, above) and
+    # "Trades (Sales)" (already reflected in the SECURITY-leg trade proceeds).
+    cat_map = {
+        "Commissions": ("FEE", "IBKR_COMMISSION"),
+        "Sales Tax": ("FEE", "GST_SALES_TAX"),
+        "Cash FX Translation Gain/Loss": ("OTHER", "FX_TRANSLATION"),
+    }
+    for currency, cats in data["cash_report"].items():
+        for cat, amount in cats.items():
+            if cat not in cat_map or amount is None:
+                continue
+            txn_type, subtype = cat_map[cat]
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO txn
+                     (account_id, instrument_id, source_leg, trade_date, txn_type, txn_subtype,
+                      currency, gross_amount, raw_description, source_reference, source_file)
+                   VALUES (?, NULL, 'CASH', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (account_id, as_of_date, txn_type, subtype, currency, amount,
+                 f"{cat} (period total)", f"{source_file}:{native_code}:CASHCAT:{currency}:{cat}", source_file),
+            )
+            n_cash += cur.rowcount
+
+    conn.commit()
+    print(f"[ibkr] {native_code}: loaded {n_positions} positions, {n_sec} security txns, {n_cash} cash txns")
+    return {"n_positions": n_positions, "n_sec": n_sec, "n_cash": n_cash}
+
+
 if __name__ == "__main__":
     import sys
     import json
-    r = parse_statement(sys.argv[1])
-    print(json.dumps(r, indent=2, default=str))
+    if len(sys.argv) > 2 and sys.argv[2] == "--load":
+        from db import get_connection
+        conn = get_connection()
+        load_ibkr_statement(sys.argv[1], conn)
+        conn.close()
+    else:
+        r = parse_statement(sys.argv[1])
+        print(json.dumps(r, indent=2, default=str))
