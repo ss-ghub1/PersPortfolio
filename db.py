@@ -56,12 +56,15 @@ def _load_reference_config(conn: sqlite3.Connection) -> None:
             conn.execute(
                 """INSERT INTO account
                      (account_id, institution_id, banking_relationship,
-                      native_account_code, account_label, base_currency)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                      native_account_code, account_label, base_currency,
+                      display_code, funding_source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(institution_id, native_account_code) DO UPDATE SET
                      account_label = excluded.account_label,
                      base_currency = excluded.base_currency,
-                     banking_relationship = excluded.banking_relationship
+                     banking_relationship = excluded.banking_relationship,
+                     display_code = excluded.display_code,
+                     funding_source = excluded.funding_source
                 """,
                 (
                     account_id,
@@ -70,6 +73,8 @@ def _load_reference_config(conn: sqlite3.Connection) -> None:
                     row["native_account_code"],
                     row.get("account_label"),
                     row.get("base_currency"),
+                    row.get("display_code"),
+                    row.get("funding_source") or "CASH",
                 ),
             )
 
@@ -110,6 +115,19 @@ def _clean_account_id(institution_id: str, native_account_code: str) -> str:
     slugified version of the native code for formats we haven't seen yet."""
     suffix = native_account_code.strip().split(" ")[-1]
     return f"{institution_id}-{suffix}"
+
+
+def load_ownership() -> dict:
+    """Returns {account_id: [{"owner": "SS", "pct": 50}, ...]}. Explicit
+    config only - an account missing from account_ownership.json should be
+    treated as ownership-unknown by callers, never defaulted."""
+    import json
+    path = CONFIG_DIR / "account_ownership.json"
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        data = json.load(f)
+    return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
 def resolve_account_id(conn: sqlite3.Connection, institution_id: str, raw_identifier: str,

@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS account (
     native_account_code   TEXT NOT NULL,         -- raw portfolio number from source, e.g. '0546 00337340 0001'
     account_label         TEXT,                  -- friendly name, user-editable
     base_currency         TEXT,                  -- 'Valued in' currency for this portfolio
+    display_code          TEXT,                  -- real institution identifier for display (Option A:
+                                                    -- internal account_id stays stable; this is what the UI shows)
+    funding_source         TEXT DEFAULT 'CASH',    -- e.g. CASH, CPF, SRS - account-level for now; may need to
+                                                    -- move to position-level later if an account mixes sources
     status                TEXT DEFAULT 'ACTIVE',
     UNIQUE(institution_id, native_account_code)
 );

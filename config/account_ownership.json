@@ -1,0 +1,15 @@
+{
+  "_comment": "Ownership is explicit config only - never inferred from a statement's own labels (e.g. UBS's 'AND/OR' wording or Endowus's account name 'Joint' are NOT treated as ownership evidence). Every account here must have an entry; an account missing from this file should be treated by the UI as ownership-unknown, not defaulted to anything.",
+
+  "UBS-0001": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}],
+  "UBS-0002": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}],
+  "UBS-0003": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}],
+  "UBS-0004": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}],
+
+  "Endowus-Joint": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}],
+
+  "CDP-0388": [{"owner": "SS", "pct": 100}],
+
+  "IBKR-U20780831": [{"owner": "SS", "pct": 100}],
+  "IBKR-U21032806": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}]
+}
