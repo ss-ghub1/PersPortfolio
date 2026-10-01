@@ -144,25 +144,59 @@ printed output once, the way we did here.
 positions and transactions, plus PDF statements for authoritative TWR.
 Handled by `ingest_positions.py` / `ingest_transactions.py` / `run_monthly_load.py`.
 
-**Endowus** (1 account, all goals combined) - no structured export exists on
+**Endowus** (2 accounts: Joint, Single) - no structured export exists on
 this platform, only a scanned monthly PDF statement (no text layer). Handled
 entirely by `ingest_endowus_pdf.py`, which OCRs each page (tesseract, 300 DPI)
-and extracts positions, fees, deposits, and trades from it. Because OCR is
-inherently less trustworthy than a text-layer extract, this loader **refuses
-to load a statement that doesn't reconcile**: it replays the statement's own
-starting balance + every cash transaction and checks it lands on the stated
-ending balance to the cent before touching the database. Run it with:
+and extracts positions, fees, deposits, and trades from it.
 ```bash
 python3 ingest_endowus_pdf.py /path/to/statement.pdf --load
 ```
+Note: unlike every other institution's loader, this one needs the target
+account specified explicitly (`account_native_code=` in code - there's no
+auto-detection from the file's own content yet, unlike CDP) since "Joint"
+vs "Single" isn't otherwise distinguishable from the PDF alone without
+building that detection.
+
+The Single account is funded by CPF and SRS, and - confirmed by actually
+loading its statement - **mixes funding sources within one account at the
+goal level** (some goals SRS, some CPF OA). This matters for more than
+just a label: CPF/SRS-funded goals bypass Endowus's own cash balance
+entirely (confirmed: the Single account's Cash Balance section showed zero
+activity in a month with $68,000 of real investment buys), and Endowus
+charges its advisory fee differently there too - by selling a small unit
+fraction directly, not deducting from cash.
+
+Because of this, reconciliation runs **three independent gates**, not one:
+1. Cash-balance replay (meaningless on its own for CPF/SRS goals - would
+   pass trivially at 0=0 without validating any real activity for them).
+2. Per-goal identity (Starting + Buy - Sell + Gain/loss = Ending) - the
+   gate that actually matters for CPF/SRS goals, verified to hold exactly
+   for both accounts, so it runs universally now, not conditionally.
+3. Allocation-table-vs-overview-table cross-check - added after actually
+   hitting the bug it exists to catch: an OCR layout variant (newly-opened,
+   single-holding goal pages split the allocation row across lines) made
+   two entire goals (20% of the Single account, $60,340) vanish from
+   positions silently, while gates 1 and 2 both still reported success,
+   since neither one touches the allocation table at all - they validate
+   the overview table's own arithmetic, which was captured correctly.
+   Worth internalizing as a general lesson: a reconciliation gate only
+   validates what it actually touches - it says nothing about a different
+   table that happens not to be checked, even if that's what gets loaded.
+
+`position_snapshot.funding_source` (not `account.funding_source`, which
+stays a coarser default for institutions that don't need this) carries the
+real per-position value (SGD Cash / CPF OA / CPF SA / SRS).
+
 A Modified Dietz return for that period is computed automatically from the
 statement's own starting/ending balance and the real dated flows - see
 `load_endowus_statement()` for why fees are deliberately excluded from that
 number (folding them in would push the result the wrong direction, since
 fees are paid from a separate cash bucket that doesn't touch the fund
-NAV the return is based on).
+NAV the return is based on). Not yet extended to account for CPF/SRS goals'
+different fee mechanism - the Modified Dietz calc still assumes the
+Joint-account cash-deduction model.
 
-**CDP** (1 account, "CDP 0388") - a real text-layer PDF (no OCR needed,
+**CDP** (2 accounts: "CDP 0388", "CDP 9563") - a real text-layer PDF (no OCR needed,
 unlike Endowus), but still no structured export for transactions (a
 positions-only Excel exists on the portal but wasn't used, for consistency -
 the PDF already covers both). Handled by `ingest_cdp_pdf.py`. Two things
@@ -294,18 +328,26 @@ internal ID is a deferred decision (see to-do list) - Option A (display
 only) is what's built; Option B (rename the actual ID) is not.
 
 **Funding source** (`account.funding_source`, e.g. `CASH`): account-level
-for now. Every account currently loaded is `CASH`. Endowus Single (not yet
-ingested) will be funded by CPF/SRS - if it turns out to mix sources within
-one account, this may need to move to position-level, matching what
-Endowus's own statement already gives us per-goal (currently parsed but
-discarded during ingestion, since every goal in the Joint account happened
-to read "SGD Cash").
+default for institutions that don't need finer grain. For Endowus Single,
+which genuinely mixes CPF/SRS/cash within one account, the real per-position
+value lives in `position_snapshot.funding_source` instead - see the Endowus
+section above.
 
 ## Current status snapshot
 
-4 institutions, 8 accounts, all reconciled: UBS (4), Endowus (1), CDP (1),
-IBKR (2). Total ~4,367,009 SGD as of the last full load (July 2026
-statements). Review queue empty across all institutions.
+4 institutions, 10 accounts, all reconciled: UBS (4), Endowus (2: Joint and
+Single - the latter is CPF/SRS-funded, mixing funding sources at the goal
+level), CDP (2: 0388 and 9563), IBKR (2). Total ~5,349,653 SGD as of the
+last full load (July 2026 statements, except CDP which also has a December
+2025 statement loaded). Review queue empty across all institutions.
+
+Endowus's reconciliation now runs THREE independent gates (cash-balance
+replay, per-goal identity, allocation-vs-overview cross-check) rather than
+one - see the Endowus section above for why the first gate alone is
+meaningless for CPF/SRS-funded goals, and why the third gate exists at all
+(it's the one that would have caught two entire goals silently vanishing
+from a real load - see git history on the "Add Endowus Single" commit for
+the full story).
 
 Git repo `PersPortfolio` pushed to `github.com/ss-ghub1/PersPortfolio`,
 `main` branch. When syncing changes from this project to your local clone,
@@ -333,20 +375,25 @@ origin ...` again.
 2. **Web app: Positions page.**
 3. **Web app: Transactions page** (filterable by type and date range).
 4. **Web app: Fees, Income, Performance, Data Health pages.**
-5. Institution #4 remaining data: Endowus Single (SS, funded by CPF/SRS)
-   and CDP 9563 (SV) - both identified, neither ingested yet.
-6. `ingest_transactions.py`: currently only warns (doesn't fail loudly) on
+5. `ingest_transactions.py`: currently only warns (doesn't fail loudly) on
    a sheet that doesn't match any known tab format - a wrong file can
    silently "succeed" with 0 rows loaded rather than erroring. Fix to fail
    loudly instead.
-7. Overview page polish: sort accounts by institution then account number
+6. Modified Dietz return calc (`load_endowus_statement()`) still assumes
+   the Joint account's cash-deduction fee mechanism - not yet updated for
+   CPF/SRS goals' different (unit-sale) fee mechanism.
+7. Endowus lacks auto-detection of which account (Joint vs Single) a
+   statement belongs to - unlike CDP, which resolves this from the
+   statement's own printed account number. Currently requires specifying
+   `account_native_code=` explicitly in code.
+8. Overview page polish: sort accounts by institution then account number
    (currently alphabetical by internal ID, which doesn't order UBS 1-4
    correctly); Endowus Joint's display label shouldn't show the email
    address.
-8. Asset class labels differ by institution (UBS: "Equities - Equity
+9. Asset class labels differ by institution (UBS: "Equities - Equity
    investments", CDP: "Equities", Endowus: "Equity Fund") - not normalized
    into one taxonomy; shows as separate rows in asset allocation today.
-9. CDP's December statements include an annual tax-summary section ("Other
+10. CDP's December statements include an annual tax-summary section ("Other
    Dividends / Coupon / Capital Repayment / Redemption / Cash Distributions
    for the Period 1 Jan-31 Dec") covering the full calendar year, not just
    December. Never parse this as a transaction source (every event in it
@@ -356,10 +403,10 @@ origin ...` again.
    and compare against this section's stated total as a pure validation
    check (never writes a transaction, so it can't double-count anything).
    Not useful until enough months exist to check against.
-10. `performance.py`: the Endowus period return is computed and stored but
+11. `performance.py`: the Endowus period return is computed and stored but
     not yet printed in the CLI report; the report header text still says
     "UBS's own statement TWR" for every account regardless of institution.
-11. **Deferred, larger decisions** (do once the basic web app design is
+12. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,

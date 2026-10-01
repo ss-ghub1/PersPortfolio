@@ -110,6 +110,12 @@ def classify_page(text):
 
 
 MONEY = r"S?\${1,2}([\d,]+\.?\d*)"
+# Known funding sources. SGD Cash was the only one ever seen in the Joint
+# account's statement; CPF OA/SA and SRS show up in the Single account.
+# An explicit alternation (not a generic wildcard) is deliberate - fund
+# names can contain arbitrary words, so a vague pattern risks over- or
+# under-matching into adjacent text.
+FUNDING_SOURCE = r"(SGD Cash|CPF OA|CPF SA|SRS)"
 ISIN_RE = re.compile(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b")
 
 
@@ -125,6 +131,12 @@ def parse_goal_name(text):
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     for l in lines[:4]:
         if l.startswith("Reee") or l.startswith("Neen") or l.startswith("in.") or "Page" in l:
+            continue
+        if len(l) <= 4 and l.islower():
+            # stray OCR noise on its own line before the real header -
+            # seen as both "a" and "eee". Real goal names in this document
+            # are always title-case or multi-word, never short all-lowercase
+            # strings, so this heuristic is safe rather than a fixed length cap.
             continue
         cleaned = re.sub(r"\s*Statement Period\s*$", "", l).strip()
         if cleaned and "Plan Currency" not in cleaned and "Display Currency" not in cleaned:
@@ -142,12 +154,12 @@ _OVERVIEW_BOILERPLATE = (
 
 
 def parse_overview_pages(pages_text):
-    """Returns {goal_name: {starting, investments, redemptions, gain_loss, ending}}
+    """Returns {goal_name: {starting, investments, redemptions, gain_loss, ending, funding_source}}
     - used only to validate the goal-allocation totals, not loaded directly."""
     out = {}
     current_goal = None
     row_re = re.compile(
-        rf"^SGD Cash\s+{MONEY}\s+{MONEY}\s+{MONEY}\s+(-?)\s*{MONEY}\s+{MONEY}$")
+        rf"^{FUNDING_SOURCE}\s+{MONEY}\s+{MONEY}\s+{MONEY}\s+(-?)\s*{MONEY}\s+{MONEY}$")
     for text in pages_text:
         if classify_page(text) != "OVERVIEW":
             continue
@@ -157,12 +169,13 @@ def parse_overview_pages(pages_text):
                 continue
             m = row_re.match(line)
             if m and current_goal:
-                sign = -1 if m.group(4) == "-" else 1
+                sign = -1 if m.group(5) == "-" else 1
                 out[current_goal] = {
-                    "starting": _to_float(m.group(1)), "investments": _to_float(m.group(2)),
-                    "redemptions": _to_float(m.group(3)),
-                    "gain_loss": _to_float(m.group(5)) * sign,
-                    "ending": _to_float(m.group(6)),
+                    "funding_source": m.group(1),
+                    "starting": _to_float(m.group(2)), "investments": _to_float(m.group(3)),
+                    "redemptions": _to_float(m.group(4)),
+                    "gain_loss": _to_float(m.group(6)) * sign,
+                    "ending": _to_float(m.group(7)),
                 }
             elif "$" not in line and not any(bp in line for bp in _OVERVIEW_BOILERPLATE):
                 # any non-data, non-boilerplate line is a goal-name header -
@@ -171,6 +184,55 @@ def parse_overview_pages(pages_text):
                 current_goal = line.title()
     return out
     return out
+
+
+def _try_fallback_split_row(lines, goal_name, page_type):
+    """Single-holding (100% allocation), newly-opened goal pages can split
+    the allocation row across the page: fund name/class/funding/units/price
+    land on one line, but 'Latest value'/'Allocation %' end up separated
+    onto a different line entirely (confirmed via the Single account's
+    Amundi and Schroder goals - both newly opened this period). Tries the
+    leading fields alone, then searches the rest of the page for a
+    standalone '$value pct%' line to supply what's missing."""
+    lead_re = re.compile(
+        r"^(.+?)\s+(Equity Fund|Multi Asset|Bond Fund|Money Market|Fixed|Alternative)\s+" +
+        FUNDING_SOURCE + rf"\s+([\d,]+\.?\d*)\s+{MONEY}\s+{MONEY}$")
+    trailing_re = re.compile(rf"^{MONEY}\s+([\d.]+)%$")
+
+    lead_match, lead_idx = None, None
+    for i, raw in enumerate(lines):
+        m = lead_re.match(raw.strip())
+        if m:
+            lead_match, lead_idx = m, i
+            break
+    if not lead_match:
+        return None
+
+    fund_name = lead_match.group(1).strip()
+    isin = None
+    if lead_idx + 1 < len(lines):
+        isin_m = ISIN_RE.search(lines[lead_idx + 1])
+        if isin_m:
+            isin = isin_m.group(1)
+
+    value, pct = None, None
+    for raw in lines[lead_idx + 1:]:
+        m = trailing_re.match(raw.strip())
+        if m:
+            value, pct = _to_float(m.group(1)), _to_float(m.group(2))
+            break
+    if value is None:
+        return None
+
+    return {
+        "goal_name": goal_name or fund_name, "fund_name": fund_name, "isin": isin,
+        "asset_class": "Fixed Income" if lead_match.group(2) == "Fixed" else lead_match.group(2),
+        "funding_source": lead_match.group(3),
+        "units": _to_float(lead_match.group(4)),
+        "nav": _to_float(lead_match.group(5)), "avg_price": _to_float(lead_match.group(6)),
+        "value": value, "allocation_pct": pct,
+        "source": page_type, "parsed_via": "fallback_split_row",
+    }
 
 
 def parse_allocation_pages(pages_text):
@@ -183,12 +245,14 @@ def parse_allocation_pages(pages_text):
             continue
         goal_name = parse_goal_name(text) if page_type == "GOAL_ALLOCATION" else None
         lines = [l for l in text.split("\n")]
+        rows_before = len(rows)
         pending_isin = None
         i = 0
         while i < len(lines):
             line = lines[i].strip()
             m = re.match(
-                r"^(.+?)\s+(Equity Fund|Multi Asset|Bond Fund|Money Market|Fixed|Alternative)\s+SGD Cash\s+"
+                r"^(.+?)\s+(Equity Fund|Multi Asset|Bond Fund|Money Market|Fixed|Alternative)\s+" +
+                FUNDING_SOURCE + r"\s+"
                 rf"([\d,]+\.?\d*)\s+{MONEY}\s+{MONEY}\s+{MONEY}\s+([\d.]+)%$",
                 line)
             if m:
@@ -207,17 +271,22 @@ def parse_allocation_pages(pages_text):
                 rows.append({
                     "goal_name": goal_name or fund_name, "fund_name": fund_name, "isin": isin,
                     "asset_class": "Fixed Income" if m.group(2) == "Fixed" else m.group(2),
-                    "units": _to_float(m.group(3)),
-                    "nav": _to_float(m.group(4)), "avg_price": _to_float(m.group(5)),
-                    "value": _to_float(m.group(6)), "allocation_pct": _to_float(m.group(7)),
+                    "funding_source": m.group(3),
+                    "units": _to_float(m.group(4)),
+                    "nav": _to_float(m.group(5)), "avg_price": _to_float(m.group(6)),
+                    "value": _to_float(m.group(7)), "allocation_pct": _to_float(m.group(8)),
                     "source": page_type,
                 })
             i += 1
+        if page_type == "GOAL_ALLOCATION" and len(rows) == rows_before:
+            fallback = _try_fallback_split_row(lines, goal_name, page_type)
+            if fallback:
+                rows.append(fallback)
     return rows
 
 
 def parse_goal_transactions_pages(pages_text):
-    """Returns list of {goal_name, trade_date, txn_type_raw, details, units, price, amount}."""
+    """Returns list of {goal_name, trade_date, txn_type_raw, details, funding_source, units, price, amount}."""
     rows = []
     for text in pages_text:
         if classify_page(text) != "GOAL_TRANSACTIONS":
@@ -226,17 +295,18 @@ def parse_goal_transactions_pages(pages_text):
         for line in text.split("\n"):
             line = line.strip()
             m = re.match(
-                r"^(\d{1,2} \w{3}\w* \d{4})\s+(Investment|Redemption|Distribution reinvested|Distribution received)\s+"
-                rf"(Buy|Sell|In Endowus cash balance for)?\s*(.+?)\s+SGD Cash\s+([\d,]+\.?\d*)\s+{MONEY}\s+{MONEY}$",
+                r"^(\d{1,2} \w{3}\w* \d{4})\s+(Investment|Redemption|Distribution reinvested|Distribution received|Fee)\s+"
+                rf"(Buy|Sell|In Endowus cash balance for)?\s*(.+?)\s+" + FUNDING_SOURCE +
+                rf"\s+([\d,]+\.?\d*)\s+{MONEY}\s+{MONEY}$",
                 line)
             if m:
                 rows.append({
                     "goal_name": goal_name,
                     "trade_date": _to_iso_date(m.group(1)),
                     "txn_type_raw": m.group(2), "side": m.group(3),
-                    "details": m.group(4).strip(),
-                    "units": _to_float(m.group(5)), "price": _to_float(m.group(6)),
-                    "amount": _to_float(m.group(7)),
+                    "details": m.group(4).strip(), "funding_source": m.group(5),
+                    "units": _to_float(m.group(6)), "price": _to_float(m.group(7)),
+                    "amount": _to_float(m.group(8)),
                 })
     return rows
 
@@ -264,10 +334,10 @@ def parse_cash_balance(pages_text):
                 continue
             trade_date = _to_iso_date(date_m.group(1))
             rest = date_m.group(2)
-            m = re.search(rf"SGD Cash\s+{MONEY}\s*$", rest)
+            m = re.search(rf"{FUNDING_SOURCE}\s+{MONEY}\s*$", rest)
             if not trade_date or not m:
                 continue
-            amount = _to_float(m.group(1))
+            amount = _to_float(m.group(2))
             desc = rest[:m.start()].strip()
             matched_type = None
             for prefix, txn_type, subtype, sign in CASH_TXN_TYPES:
@@ -285,7 +355,7 @@ def parse_cash_balance(pages_text):
             result["transactions"].append({
                 "trade_date": trade_date, "raw_label": desc.split(" ")[0] + (
                     " " + desc.split(" ")[1] if len(desc.split(" ")) > 1 else ""),
-                "txn_type": txn_type, "txn_subtype": subtype,
+                "txn_type": txn_type, "txn_subtype": subtype, "funding_source": m.group(1),
                 "raw_description": details, "gross_amount": amount * sign,
             })
     return result
@@ -294,13 +364,30 @@ def parse_cash_balance(pages_text):
 # ---------------------------------------------------------------------------
 def parse_statement(pdf_path):
     pages_text = ocr_pages(pdf_path)
-    m = re.search(r"(\d{2}) (\w{3})\w* - (\d{2}) (\w{3})\w* (\d{4})", pages_text[0])
+
+    # The "All Investment Goals" overview page carries the period and
+    # headline figures - don't assume it's pages_text[0], since some
+    # statements (the Single account, confirmed) have a cover page before
+    # it that the Joint account's statements didn't have.
+    overview_page = next((t for t in pages_text if classify_page(t) == "OVERVIEW"), pages_text[0])
+
+    m = re.search(r"(\d{2}) (\w{3})\w* - (\d{2}) (\w{3})\w* (\d{4})", overview_page)
     period_end = None
     if m:
         d2, mon2, year = m.group(3), m.group(4), m.group(5)
         mon3 = mon2[:3]
         if mon3 in MONTHS:
             period_end = f"{year}-{MONTHS[mon3]:02d}-{int(d2):02d}"
+    if period_end is None:
+        # alternate format seen on the Single account's cover page:
+        # "01 Jul 2026 to 31 Jul 2026" (each date has its own year)
+        m2 = re.search(r"\d{1,2} \w{3}\w* \d{4} to (\d{1,2}) (\w{3})\w* (\d{4})",
+                        pages_text[0] + "\n" + overview_page)
+        if m2:
+            d2, mon2, year = m2.group(1), m2.group(2), m2.group(3)
+            mon3 = mon2[:3]
+            if mon3 in MONTHS:
+                period_end = f"{year}-{MONTHS[mon3]:02d}-{int(d2):02d}"
 
     headline = {}
     m = re.search(
@@ -309,6 +396,13 @@ def parse_statement(pdf_path):
         rf"Returns \([^)]+\)\s*\n\s*"
         rf"{MONEY}\s+{MONEY}\s+(-?)\s*{MONEY}",
         pages_text[0])
+    if not m:
+        m = re.search(
+            rf"Investment Starting Balance \((\d{{2}} \w{{3}}\w* \d{{4}})\)\s*"
+            rf"Investment Ending Balance \((\d{{2}} \w{{3}}\w* \d{{4}})\)\s*"
+            rf"Returns \([^)]+\)\s*\n\s*"
+            rf"{MONEY}\s+{MONEY}\s+(-?)\s*{MONEY}",
+            overview_page)
     if m:
         headline["start_date"] = _to_iso_date(m.group(1))
         headline["starting_balance"] = _to_float(m.group(3))
@@ -373,6 +467,80 @@ def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint", 
         return None
     print(f"[endowus] Reconciliation OK: {cb['starting_balance']:.2f} + flows = "
           f"{replayed:.2f} (matches stated ending {cb['ending_balance']:.2f})")
+
+    # --- Second, independent gate: per-goal identity (Starting + Buy - Sell
+    # + Gain/loss = Ending). This is the PRIMARY check for any goal funded
+    # by CPF/SRS, since those bypass the cash pool entirely - the cash-
+    # balance check above would pass trivially (0=0) for such an account
+    # without validating a single dollar of real activity. Verified to hold
+    # exactly for both the Joint and Single accounts, so this runs
+    # universally rather than only when CPF/SRS funding is detected. ---
+    overview = parsed["overview"]
+    if not overview:
+        print(f"[endowus] ABORT: could not parse the per-goal overview table in {source_file} "
+              f"- nothing to validate against.")
+        return None
+    goal_check_failed = False
+    for goal_name, g in overview.items():
+        expected_ending = g["starting"] + g["investments"] - g["redemptions"] + g["gain_loss"]
+        goal_diff = round(expected_ending - g["ending"], 2)
+        if abs(goal_diff) > 0.02:
+            print(f"[endowus] ABORT: goal '{goal_name}' does not reconcile "
+                  f"(starting {g['starting']:.2f} + investments {g['investments']:.2f} "
+                  f"- redemptions {g['redemptions']:.2f} + gain/loss {g['gain_loss']:.2f} "
+                  f"= {expected_ending:.2f}, but stated ending is {g['ending']:.2f}, "
+                  f"diff={goal_diff:.2f}). Not loading - check OCR output before retrying.")
+            goal_check_failed = True
+    if goal_check_failed:
+        return None
+    print(f"[endowus] Reconciliation OK: all {len(overview)} goals reconcile exactly "
+          f"(starting + investments - redemptions + gain/loss = ending, per goal)")
+
+    # --- Third, independent gate: cross-check that POSITIONS (loaded from
+    # the allocation table) actually agree with the overview table's
+    # validated per-goal ending balance. The first two gates both validate
+    # the overview table's own internal arithmetic - neither one confirms
+    # that the allocation table (what positions actually get loaded FROM)
+    # captured every goal completely. This gap is exactly what let two
+    # whole goals silently vanish from a prior Single-account load (an OCR
+    # layout variant on newly-opened, single-holding goal pages split the
+    # row across lines in a way the parser didn't handle) while both other
+    # gates still reported success, since they never touched the
+    # allocation table at all. ---
+    alloc_totals_by_goal = {}
+    for row in parsed["allocations"]:
+        if row["source"] != "GOAL_ALLOCATION" or not row["value"]:
+            continue
+        key = (row["goal_name"] or row["fund_name"]).strip().lower()
+        alloc_totals_by_goal[key] = alloc_totals_by_goal.get(key, 0.0) + row["value"]
+
+    alloc_check_failed = False
+    for goal_name, g in overview.items():
+        key = goal_name.strip().lower()
+        alloc_total = alloc_totals_by_goal.get(key)
+        if alloc_total is None:
+            if abs(g["ending"]) < 0.02:
+                # genuinely zero (e.g. fully redeemed this period) - no
+                # allocation row is correct here, not a parsing failure
+                continue
+            print(f"[endowus] ABORT: goal '{goal_name}' has an overview entry (ending "
+                  f"{g['ending']:.2f}) but NO allocation-table rows were captured for it at "
+                  f"all - this goal would silently vanish from positions. Not loading - "
+                  f"check OCR output before retrying.")
+            alloc_check_failed = True
+            continue
+        alloc_diff = round(alloc_total - g["ending"], 2)
+        if abs(alloc_diff) > 0.02:
+            print(f"[endowus] ABORT: goal '{goal_name}' allocation-table total "
+                  f"({alloc_total:.2f}) does not match its overview-table ending "
+                  f"({g['ending']:.2f}), diff={alloc_diff:.2f}. Not loading - check OCR "
+                  f"output before retrying.")
+            alloc_check_failed = True
+    if alloc_check_failed:
+        return None
+    print(f"[endowus] Reconciliation OK: allocation-table totals match the overview table's "
+          f"ending balance for all {len(overview)} goals - positions are complete.")
+
     account_id = conn.execute(
         "SELECT account_id FROM account WHERE institution_id='Endowus' AND native_account_code=?",
         (account_native_code,),
@@ -390,6 +558,22 @@ def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint", 
         (account_id, cb["start_date"], cb["end_date"], replayed, cb["ending_balance"], diff,
          f"Starting {cb['starting_balance']:.2f} + {len(cb['transactions'])} cash flows "
          f"reconciles to stated ending balance (source: {source_file})"),
+    )
+    conn.execute(
+        """INSERT INTO reconciliation_log
+             (account_id, scope, period_start, period_end, status, notes)
+           VALUES (?, 'ENDOWUS_PER_GOAL_IDENTITY', ?, ?, 'OK', ?)""",
+        (account_id, cb.get("start_date"), parsed["period_end"],
+         f"All {len(overview)} goals reconcile exactly: starting + investments - redemptions "
+         f"+ gain/loss = ending (source: {source_file})"),
+    )
+    conn.execute(
+        """INSERT INTO reconciliation_log
+             (account_id, scope, period_start, period_end, status, notes)
+           VALUES (?, 'ENDOWUS_ALLOCATION_VS_OVERVIEW', ?, ?, 'OK', ?)""",
+        (account_id, cb.get("start_date"), parsed["period_end"],
+         f"Allocation-table totals match the overview table's ending balance for all "
+         f"{len(overview)} goals - positions are complete (source: {source_file})"),
     )
     conn.commit()
 
@@ -417,20 +601,22 @@ def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint", 
             """INSERT INTO position_snapshot
                  (account_id, instrument_id, is_cash, as_of_date, position_currency,
                   quantity, cost_price, market_price, market_value_base,
-                  pct_of_portfolio, source_file)
-               VALUES (?, ?, 0, ?, 'SGD', ?, ?, ?, ?, ?, ?)""",
+                  pct_of_portfolio, funding_source, source_file)
+               VALUES (?, ?, 0, ?, 'SGD', ?, ?, ?, ?, ?, ?, ?)""",
             (account_id, instrument_id, parsed["period_end"], row["units"],
-             row["avg_price"], row["nav"], row["value"], row["allocation_pct"], source_file),
+             row["avg_price"], row["nav"], row["value"], row["allocation_pct"],
+             row.get("funding_source"), source_file),
         )
         n_positions += 1
     conn.commit()  # commit positions/instruments before the txn loops reference them
 
-    # cash position row
+    # cash position row - this is specifically the SGD cash pool (confirmed:
+    # CPF/SRS-funded goals bypass it entirely, so it's never a mix)
     conn.execute(
         """INSERT INTO position_snapshot
              (account_id, instrument_id, is_cash, as_of_date, position_currency,
-              quantity, market_value_base, source_file)
-           VALUES (?, NULL, 1, ?, 'SGD', ?, ?, ?)""",
+              quantity, market_value_base, funding_source, source_file)
+           VALUES (?, NULL, 1, ?, 'SGD', ?, ?, 'SGD Cash', ?)""",
         (account_id, parsed["period_end"], cb["ending_balance"], cb["ending_balance"], source_file),
     )
     n_positions += 1
@@ -452,7 +638,7 @@ def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint", 
 
     # --- Security-leg transactions (unit-level trade detail per goal) ---
     n_sec_txn = 0
-    type_map = {"Investment": "BUY", "Redemption": "SELL", "Distribution reinvested": "BUY"}
+    type_map = {"Investment": "BUY", "Redemption": "SELL", "Distribution reinvested": "BUY", "Fee": "FEE"}
     for i, t in enumerate(parsed["goal_transactions"]):
         instrument_id = None
         for row in parsed["allocations"]:
@@ -462,7 +648,15 @@ def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint", 
                 instrument_id = row["isin"] or f"NAME:{row['fund_name']}"
                 break
         txn_type = type_map.get(t["txn_type_raw"], "OTHER")
-        subtype = "REINVESTMENT" if t["txn_type_raw"] == "Distribution reinvested" else None
+        if t["txn_type_raw"] == "Distribution reinvested":
+            subtype = "REINVESTMENT"
+        elif t["txn_type_raw"] == "Fee":
+            # Endowus charges its advisory fee by selling a small unit
+            # fraction directly, for goals with no cash pool to deduct from
+            # (CPF/SRS) - confirmed via the Single account's statement.
+            subtype = "ADVISORY_FEE"
+        else:
+            subtype = None
         cur = conn.execute(
             """INSERT OR IGNORE INTO txn
                  (account_id, instrument_id, source_leg, trade_date, txn_type, txn_subtype,
@@ -470,7 +664,7 @@ def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint", 
                   source_reference, source_file)
                VALUES (?, ?, 'SECURITY', ?, ?, ?, 'SGD', ?, ?, ?, ?, ?, ?, ?)""",
             (account_id, instrument_id, t["trade_date"], txn_type, subtype,
-             t["units"], t["price"], t["amount"] * (-1 if txn_type == "BUY" else 1),
+             t["units"], t["price"], t["amount"] * (-1 if txn_type in ("BUY", "FEE") else 1),
              t["txn_type_raw"], t["details"], f"{source_file}:SEC:{i}", source_file),
         )
         n_sec_txn += cur.rowcount

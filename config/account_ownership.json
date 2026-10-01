@@ -7,8 +7,10 @@
   "UBS-0004": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}],
 
   "Endowus-Joint": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}],
+  "Endowus-Single": [{"owner": "SS", "pct": 100}],
 
   "CDP-0388": [{"owner": "SS", "pct": 100}],
+  "CDP-9563": [{"owner": "SV", "pct": 100}],
 
   "IBKR-U20780831": [{"owner": "SS", "pct": 100}],
   "IBKR-U21032806": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}]

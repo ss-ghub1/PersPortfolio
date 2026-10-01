@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS position_snapshot (
     unrealized_pl_pct                     REAL,
     accrued_interest                       REAL,
     pct_of_portfolio                        REAL,
+    funding_source                           TEXT,                                        -- e.g. SGD Cash, CPF OA, SRS - position-
+                                                                                            -- level because one account (Endowus
+                                                                                            -- Single, confirmed) genuinely mixes these
     source_file                              TEXT NOT NULL,
     loaded_at                                 TEXT NOT NULL DEFAULT (datetime('now'))
 );
