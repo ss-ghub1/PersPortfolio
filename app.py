@@ -40,7 +40,21 @@ def _owner_from_request():
 @app.context_processor
 def inject_nav():
     return {"nav_pages": NAV_PAGES, "owners": reports.list_owners(load_ownership()),
-            "current_owner": _owner_from_request()}
+            "current_owner": _owner_from_request(), "css_version": _css_version()}
+
+
+def _css_version():
+    """Last-modified timestamp of style.css, used as a cache-busting query
+    param so a browser that cached an old version of the stylesheet picks
+    up a change automatically - no manual version bump needed, and no more
+    debugging 'the CSS change isn't showing up' when it's actually just a
+    stale browser cache."""
+    import os
+    path = os.path.join(app.static_folder, "style.css")
+    try:
+        return int(os.path.getmtime(path))
+    except OSError:
+        return 0
 
 
 @app.route("/")
@@ -123,7 +137,23 @@ def income():
     return render_template("income.html", active_page="income", owner=owner, data=data, detail=detail)
 
 
-STUB_PAGES = [p for p in NAV_PAGES[1:] if p[0] not in ("positions", "transactions", "fees", "income")]
+@app.route("/data_health")
+def data_health():
+    conn = get_connection()
+    reconciliation = reports.get_reconciliation_status(conn)
+    review_queue = reports.get_review_queue(conn)
+    freshness = reports.get_data_freshness(conn)
+    missing_ownership = reports.get_ownership_coverage(conn)
+    conn.close()
+    return render_template(
+        "data_health.html", active_page="data_health", owner=None,
+        reconciliation=reconciliation, review_queue=review_queue,
+        freshness=freshness, missing_ownership=missing_ownership,
+    )
+
+
+STUB_PAGES = [p for p in NAV_PAGES[1:]
+              if p[0] not in ("positions", "transactions", "fees", "income", "data_health")]
 for slug, label in STUB_PAGES:
     def _make_stub(slug=slug, label=label):
         def _stub():
