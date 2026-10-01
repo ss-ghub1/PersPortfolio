@@ -138,6 +138,16 @@ def parse_goal_name(text):
             # are always title-case or multi-word, never short all-lowercase
             # strings, so this heuristic is safe rather than a fixed length cap.
             continue
+        if re.search(r"(.)\1{2,}", l):
+            # a different, LONGER OCR noise artifact - e.g.
+            # "Neeeeeeeeeeeeeee reer reer r rer er rr rere errr ree reer eee"
+            # (found on a user's own machine - different Tesseract build/
+            # version than this project's own testing, confirming OCR noise
+            # patterns aren't fully predictable across environments for the
+            # identical source PDF). 3+ identical characters in a row is
+            # essentially never real text, regardless of overall length, so
+            # this generalizes better than a length-based filter alone.
+            continue
         cleaned = re.sub(r"\s*Statement Period\s*$", "", l).strip()
         if cleaned and "Plan Currency" not in cleaned and "Display Currency" not in cleaned:
             return cleaned
