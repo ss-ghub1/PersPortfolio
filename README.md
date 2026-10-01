@@ -511,7 +511,11 @@ you hit them. Ordered by how much they could actually bite you.
 13. `performance.py`: the Endowus period return is computed and stored but
     not yet printed in the CLI report; the report header text still says
     "UBS's own statement TWR" for every account regardless of institution.
-14. **Deferred, larger decisions** (do once the basic web app design is
+14. Positions page: "On Loan" is its own column but only ever populated for
+    CDP holdings - wasted space for every other institution's rows.
+    Consider showing it as a second, indented sub-row under the position
+    instead (e.g. "  -> 2,000 on loan"), freeing up that column entirely.
+15. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,
