@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Data Health</h1>
+
+  <section>
+    <h3>Reconciliation checks - needs attention ({{ reconciliation.mismatches | length }})</h3>
+    {% if reconciliation.mismatches %}
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th><th>Institution</th><th>Check</th><th>Status</th>
+            <th class="num">Expected</th><th class="num">Actual</th><th class="num">Diff</th>
+            <th>As of</th><th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in reconciliation.mismatches %}
+          <tr class="{{ 'row-review' if r.label == 'MISMATCH / Review' else 'row-gap' }}">
+            <td>{{ r.display_code }}</td>
+            <td>{{ r.institution_id }}</td>
+            <td>{{ r.scope }}</td>
+            <td><strong>{{ r.label }}</strong></td>
+            <td class="num">{{ "{:,.2f}".format(r.expected_value) if r.expected_value is not none else "-" }}</td>
+            <td class="num">{{ "{:,.2f}".format(r.actual_value) if r.actual_value is not none else "-" }}</td>
+            <td class="num">{{ "{:,.2f}".format(r.difference) if r.difference is not none else "-" }}</td>
+            <td class="nowrap">{{ r.period_end or "-" }}</td>
+            <td>{{ r.gap_note or r.notes or "-" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="all-clear">0 mismatches - everything reconciles.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h3>Reconciliation checks - matched ({{ reconciliation.matched | length }})</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Account</th><th>Institution</th><th>Check</th><th>Status</th>
+          <th class="num">Expected</th><th class="num">Actual</th><th class="num">Diff</th>
+          <th>As of</th><th>Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in reconciliation.matched %}
+        <tr>
+          <td>{{ r.display_code }}</td>
+          <td>{{ r.institution_id }}</td>
+          <td>{{ r.scope }}</td>
+          <td>{{ r.label }}</td>
+          <td class="num">{{ "{:,.2f}".format(r.expected_value) if r.expected_value is not none else "-" }}</td>
+          <td class="num">{{ "{:,.2f}".format(r.actual_value) if r.actual_value is not none else "-" }}</td>
+          <td class="num">{{ "{:,.2f}".format(r.difference) if r.difference is not none else "-" }}</td>
+          <td class="nowrap">{{ r.period_end or "-" }}</td>
+          <td>{{ r.notes or "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h3>Review queue</h3>
+    {% if review_queue %}
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th><th>Institution</th><th>Date</th><th class="num">Amount</th>
+            <th>Description</th><th>Source file</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in review_queue %}
+          <tr>
+            <td>{{ t.display_code }}</td>
+            <td>{{ t.institution_id }}</td>
+            <td class="nowrap">{{ t.trade_date }}</td>
+            <td class="num">{{ "{:,.2f}".format(t.gross_amount) if t.gross_amount is not none else "-" }} {{ t.currency }}</td>
+            <td>{{ t.raw_description or t.raw_txn_type_label or "-" }}</td>
+            <td>{{ t.source_file }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="all-clear">0 items - all transactions classified.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h3>Data freshness, by account</h3>
+    <table>
+      <thead>
+        <tr><th>Account</th><th>Institution</th><th>Last position date</th><th>Last loaded</th></tr>
+      </thead>
+      <tbody>
+        {% for f in freshness %}
+        <tr>
+          <td>{{ f.display_code }}</td>
+          <td>{{ f.institution_id }}</td>
+          <td class="nowrap">{{ f.last_position_date or "-" }}</td>
+          <td class="nowrap">{{ f.last_loaded_at or "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h3>Ownership coverage</h3>
+    {% if missing_ownership %}
+      <div class="warning">
+        Missing from <code>config/account_ownership.json</code>: {{ missing_ownership | join(', ') }} -
+        these accounts are silently excluded from every owner-filtered view across the app.
+      </div>
+    {% else %}
+      <p class="all-clear">Every account has an ownership entry.</p>
+    {% endif %}
+  </section>
+{% endblock %}

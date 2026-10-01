@@ -72,8 +72,8 @@
         {% for r in last_loaded %}
         <tr>
           <td>{{ r.institution_id }}</td>
-          <td>{{ r.last_position_date }}</td>
-          <td>{{ r.last_loaded_at }}</td>
+          <td class="nowrap">{{ r.last_position_date }}</td>
+          <td class="nowrap">{{ r.last_loaded_at }}</td>
         </tr>
         {% endfor %}
       </tbody>

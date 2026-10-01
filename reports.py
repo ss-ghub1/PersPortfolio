@@ -5,7 +5,7 @@ render templates around the result. When Phase 2 adds JSON endpoints for
 an interactive dashboard, they call the exact same functions and just
 jsonify() the result instead of rendering a template - no logic duplicated.
 """
-from db import get_connection, load_ownership
+from db import get_connection, load_ownership, CONFIG_DIR
 
 
 def get_fx_rate(conn, from_ccy, to_ccy="SGD"):
@@ -324,6 +324,103 @@ def _grouped_cash_report(conn, txn_type, owner, group_cols, group_labels=None):
         if value_sgd is not None:
             total_sgd += value_sgd
     return {"rows": rows, "total_sgd": total_sgd, "unknown_ownership_accounts": sorted(unknown)}
+
+
+def load_known_gaps() -> dict:
+    """Returns {(account_id, scope): note}. Explicit config only - a
+    MISMATCH only shows as 'Known Gap' if its exact account+scope is
+    listed here; anything else defaults to 'Review', same explicit-over-
+    inferred principle as confirmed_transfers.csv and
+    account_ownership.json elsewhere in this project."""
+    import csv
+    path = CONFIG_DIR / "known_reconciliation_gaps.csv"
+    if not path.exists():
+        return {}
+    out = {}
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            out[(row["account_id"], row["scope"])] = row["note"]
+    return out
+
+
+def get_reconciliation_status(conn):
+    """Returns {"mismatches": [...], "matched": [...]} - mismatches first
+    (Known Gap and Review both), matched (OK) grouped separately below,
+    so anything needing attention is never buried under a long list of
+    passing checks. Same row shape in both lists: {account_id,
+    display_code, institution_id, scope, status, label, expected_value,
+    actual_value, difference, period_end, notes, run_at}. label is 'OK',
+    'MISMATCH / Known Gap', or 'MISMATCH / Review' - MISMATCH itself is
+    never softened, the suffix is purely our own classification layered
+    on top. Latest run per (account_id, scope) only, not full history."""
+    known_gaps = load_known_gaps()
+    rows = conn.execute("""
+        SELECT r.*, a.display_code, a.institution_id
+        FROM reconciliation_log r
+        JOIN account a ON a.account_id = r.account_id
+        WHERE r.recon_id IN (SELECT max(recon_id) FROM reconciliation_log GROUP BY account_id, scope)
+        ORDER BY a.institution_id, r.account_id, r.scope
+    """).fetchall()
+    mismatches, matched = [], []
+    for r in rows:
+        status = r["status"]
+        if status == "MISMATCH":
+            key = (r["account_id"], r["scope"])
+            if key in known_gaps:
+                label = "MISMATCH / Known Gap"
+                gap_note = known_gaps[key]
+            else:
+                label = "MISMATCH / Review"
+                gap_note = None
+        else:
+            label = status
+            gap_note = None
+        row = {
+            "account_id": r["account_id"], "display_code": r["display_code"] or r["account_id"],
+            "institution_id": r["institution_id"], "scope": r["scope"], "status": status,
+            "label": label, "expected_value": r["expected_value"], "actual_value": r["actual_value"],
+            "difference": r["difference"], "period_end": r["period_end"],
+            "notes": r["notes"], "gap_note": gap_note, "run_at": r["run_at"],
+        }
+        (mismatches if status == "MISMATCH" else matched).append(row)
+    # within mismatches, surface unexplained ones before known/explained ones
+    mismatches.sort(key=lambda r: r["label"] == "MISMATCH / Known Gap")
+    return {"mismatches": mismatches, "matched": matched}
+
+
+def get_review_queue(conn):
+    """Returns list of unclassified transactions - every field needed to
+    actually classify them by hand, not just a count."""
+    rows = conn.execute("""
+        SELECT t.account_id, a.display_code, a.institution_id, t.trade_date,
+               t.currency, t.gross_amount, t.raw_description, t.raw_txn_type_label,
+               t.source_file
+        FROM txn t JOIN account a ON a.account_id = t.account_id
+        WHERE t.txn_type = 'OTHER' AND t.txn_subtype = 'UNCLASSIFIED'
+        ORDER BY t.trade_date DESC
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_data_freshness(conn):
+    """Returns list of {account_id, display_code, institution_id,
+    last_position_date, last_loaded_at} - one row per account."""
+    rows = conn.execute("""
+        SELECT a.account_id, a.display_code, a.institution_id,
+               max(p.as_of_date) AS last_position_date, max(p.loaded_at) AS last_loaded_at
+        FROM account a LEFT JOIN position_snapshot p ON p.account_id = a.account_id
+        GROUP BY a.account_id ORDER BY a.institution_id, a.account_id
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_ownership_coverage(conn):
+    """Returns list of account_ids present in accounts.csv but missing
+    from account_ownership.json - these silently vanish from every
+    owner-filtered view across the app without this check."""
+    ownership = load_ownership()
+    all_accounts = [r[0] for r in conn.execute("SELECT account_id FROM account ORDER BY account_id")]
+    return [a for a in all_accounts if a not in ownership]
 
 
 def list_institutions(conn):
