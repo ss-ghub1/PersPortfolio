@@ -62,7 +62,24 @@ def overview():
     )
 
 
-for slug, label in NAV_PAGES[1:]:
+@app.route("/positions")
+def positions():
+    owner = _owner_from_request()
+    institution = request.args.get("institution") or None
+    conn = get_connection()
+    institutions = reports.list_institutions(conn)
+    if institution and institution not in institutions:
+        institution = None
+    data = reports.get_positions(conn, owner, institution_filter=institution)
+    conn.close()
+    return render_template(
+        "positions.html", active_page="positions", owner=owner,
+        data=data, institutions=institutions, current_institution=institution,
+    )
+
+
+STUB_PAGES = [p for p in NAV_PAGES[1:] if p[0] != "positions"]
+for slug, label in STUB_PAGES:
     def _make_stub(slug=slug, label=label):
         def _stub():
             return render_template("coming_soon.html", active_page=slug, page_label=label,

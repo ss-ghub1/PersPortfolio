@@ -130,6 +130,69 @@ def get_asset_allocation(conn, owner=None):
     return {"rows": out, "total_sgd": grand_total, "unknown_ownership_accounts": sorted(unknown)}
 
 
+def get_positions(conn, owner=None, institution_filter=None, account_filter=None):
+    """Returns {"rows": [...], "total_sgd": float, "unknown_ownership_accounts": [...]}.
+    One row per holding (latest snapshot per account), institution/account
+    filters optional. Same owner-weighting rules as get_account_values -
+    an account missing from account_ownership.json is excluded (not
+    zero-filled) from an owner's view, never silently defaulted."""
+    ownership = load_ownership()
+    query = """
+        SELECT p.account_id, p.instrument_id, p.is_cash, p.as_of_date,
+               p.position_currency, p.quantity, p.quantity_on_loan,
+               p.market_value_native, p.market_value_base, p.funding_source,
+               i.name AS instrument_name, i.asset_class,
+               a.institution_id, a.display_code, a.account_label, a.base_currency
+        FROM position_snapshot p
+        JOIN account a ON a.account_id = p.account_id
+        LEFT JOIN instrument i ON i.instrument_id = p.instrument_id
+        WHERE p.as_of_date = (SELECT max(as_of_date) FROM position_snapshot p2
+                               WHERE p2.account_id = p.account_id)
+    """
+    params = []
+    if institution_filter:
+        query += " AND a.institution_id = ?"
+        params.append(institution_filter)
+    if account_filter:
+        query += " AND p.account_id = ?"
+        params.append(account_filter)
+
+    rows, total_sgd, unknown = [], 0.0, set()
+    for r in conn.execute(query, params).fetchall():
+        weight = 1.0
+        if owner:
+            w = ownership_weight(ownership, r["account_id"], owner)
+            if w is None:
+                unknown.add(r["account_id"])
+                continue
+            weight = w
+
+        rate = get_fx_rate(conn, r["base_currency"])
+        value_sgd = (r["market_value_base"] * rate * weight) if rate and r["market_value_base"] else None
+
+        rows.append({
+            "account_id": r["account_id"], "institution_id": r["institution_id"],
+            "display_code": r["display_code"] or r["account_id"],
+            "instrument_name": r["instrument_name"] or ("Cash" if r["is_cash"] else r["instrument_id"]),
+            "asset_class": r["asset_class"] or ("Cash" if r["is_cash"] else None),
+            "is_cash": bool(r["is_cash"]),
+            "currency": r["position_currency"], "quantity": r["quantity"],
+            "quantity_on_loan": r["quantity_on_loan"],
+            "funding_source": r["funding_source"],
+            "value_native": r["market_value_native"], "value_base": r["market_value_base"],
+            "value_sgd": value_sgd, "as_of": r["as_of_date"],
+        })
+        if value_sgd is not None:
+            total_sgd += value_sgd
+
+    rows.sort(key=lambda r: (r["institution_id"], r["account_id"], -(r["value_sgd"] or 0)))
+    return {"rows": rows, "total_sgd": total_sgd, "unknown_ownership_accounts": sorted(unknown)}
+
+
+def list_institutions(conn):
+    return [r[0] for r in conn.execute("SELECT DISTINCT institution_id FROM account ORDER BY institution_id")]
+
+
 def get_last_loaded_by_institution(conn):
     rows = conn.execute(
         """SELECT a.institution_id, max(p.as_of_date) AS last_position_date,

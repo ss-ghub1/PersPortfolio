@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Positions {% if owner %}<span class="owner-badge">{{ owner }}'s share</span>{% else %}<span class="owner-badge">Consolidated</span>{% endif %}</h1>
+
+  {% if data.unknown_ownership_accounts %}
+    <div class="warning">
+      Ownership not configured for: {{ data.unknown_ownership_accounts | join(', ') }} -
+      excluded from this {{ owner }} view. See <code>config/account_ownership.json</code>.
+    </div>
+  {% endif %}
+
+  <div class="filter-bar">
+    <span>Institution:</span>
+    <a href="?{% if owner %}owner={{ owner }}{% endif %}"
+       class="{{ 'active' if not current_institution else '' }}">All</a>
+    {% for inst in institutions %}
+      <a href="?institution={{ inst }}{% if owner %}&owner={{ owner }}{% endif %}"
+         class="{{ 'active' if current_institution == inst else '' }}">{{ inst }}</a>
+    {% endfor %}
+  </div>
+
+  <section>
+    <h2>Total: {{ "{:,.0f}".format(data.total_sgd) }} SGD</h2>
+  </section>
+
+  <section>
+    <table>
+      <thead>
+        <tr>
+          <th>Account</th><th>Institution</th><th>Instrument</th><th>Asset Class</th>
+          <th>Funding</th><th class="num">Quantity</th><th class="num">On Loan</th>
+          <th class="num">Value (Native)</th><th class="num">Value (SGD)</th><th>As of</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in data.rows %}
+        <tr>
+          <td>{{ p.display_code }}</td>
+          <td>{{ p.institution_id }}</td>
+          <td>{{ p.instrument_name }}</td>
+          <td>{{ p.asset_class or "-" }}</td>
+          <td>{{ p.funding_source or "-" }}</td>
+          <td class="num">{{ "{:,.2f}".format(p.quantity) if p.quantity is not none else "-" }}</td>
+          <td class="num">{{ "{:,.2f}".format(p.quantity_on_loan) if p.quantity_on_loan else "-" }}</td>
+          <td class="num">{{ "{:,.0f}".format(p.value_native) if p.value_native is not none else "-" }} {{ p.currency }}</td>
+          <td class="num">{{ "{:,.0f}".format(p.value_sgd) if p.value_sgd is not none else "-" }}</td>
+          <td>{{ p.as_of }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="8">TOTAL</td>
+          <td class="num">{{ "{:,.0f}".format(data.total_sgd) }}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </section>
+{% endblock %}
