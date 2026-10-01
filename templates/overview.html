@@ -33,7 +33,7 @@
           <td class="num">{{ "{:,.0f}".format(a.native_value) }} {{ a.base_currency }}</td>
           <td class="num">{{ "{:,.0f}".format(a.value_sgd) if a.value_sgd is not none else "-" }}</td>
           {% if owner %}<td class="num">{{ (a.ownership_weight * 100) | round(0, 'floor') | int }}%</td>{% endif %}
-          <td>{{ a.as_of or "-" }}</td>
+          <td class="nowrap">{{ a.as_of or "-" }}</td>
         </tr>
         {% endfor %}
       </tbody>
