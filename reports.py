@@ -274,15 +274,18 @@ def _leg_preferred_query(txn_type):
 
 def get_fees(conn, owner=None):
     """Returns {"rows": [...], "total_sgd": float, "unknown_ownership_accounts": [...]}.
-    Grouped by account + subtype, matching demo_reports.py's shape."""
-    return _grouped_cash_report(conn, "FEE", owner, group_cols=["t.txn_subtype"])
+    Grouped by account + subtype + year."""
+    return _grouped_cash_report(conn, "FEE", owner,
+                                 group_cols=["t.txn_subtype", "substr(t.trade_date,1,4)"],
+                                 group_labels=["txn_subtype", "year"])
 
 
 def get_income(conn, owner=None):
     """Returns {"rows": [...], "total_sgd": float, "unknown_ownership_accounts": [...]}.
-    Grouped by account + year, matching demo_reports.py's shape."""
-    return _grouped_cash_report(conn, "INCOME", owner, group_cols=["substr(t.trade_date,1,4)"],
-                                 group_labels=["year"])
+    Grouped by account + year + subtype."""
+    return _grouped_cash_report(conn, "INCOME", owner,
+                                 group_cols=["substr(t.trade_date,1,4)", "t.txn_subtype"],
+                                 group_labels=["year", "txn_subtype"])
 
 
 def _grouped_cash_report(conn, txn_type, owner, group_cols, group_labels=None):

@@ -17,7 +17,7 @@
     <table>
       <thead>
         <tr>
-          <th>Account</th><th>Institution</th><th>Subtype</th>
+          <th>Account</th><th>Institution</th><th>Subtype</th><th>Year</th>
           <th class="num"># Txns</th>
           <th class="num">Amount (Native)</th><th class="num">Amount (SGD)</th>
         </tr>
@@ -28,6 +28,7 @@
           <td>{{ f.display_code }}</td>
           <td>{{ f.institution_id }}</td>
           <td>{{ f.txn_subtype or "-" }}</td>
+          <td>{{ f.year }}</td>
           <td class="num">{{ f.n }}</td>
           <td class="num">{{ "{:,.2f}".format(f.amount_native) }} {{ f.currency }}</td>
           <td class="num">{{ "{:,.2f}".format(f.amount_sgd) if f.amount_sgd is not none else "-" }}</td>
@@ -36,7 +37,7 @@
       </tbody>
       <tfoot>
         <tr>
-          <td colspan="5">TOTAL</td>
+          <td colspan="6">TOTAL</td>
           <td class="num">{{ "{:,.2f}".format(data.total_sgd) }}</td>
         </tr>
       </tfoot>
