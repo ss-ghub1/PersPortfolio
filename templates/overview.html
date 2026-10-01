@@ -39,8 +39,9 @@
       </tbody>
       <tfoot>
         <tr>
-          <td colspan="{{ 4 if owner else 3 }}">TOTAL</td>
+          <td colspan="4">TOTAL</td>
           <td class="num">{{ "{:,.0f}".format(accounts.total_sgd) }}</td>
+          {% if owner %}<td></td>{% endif %}
           <td></td>
         </tr>
       </tfoot>
