@@ -464,40 +464,51 @@ you hit them. Ordered by how much they could actually bite you.
    detect Endowus by "OCR found no text layer" - that shortcut breaks the
    moment a second scanned-PDF institution exists. Use explicit branding-
    text matching for every institution, including Endowus, from the start.
-2. **Web app: Positions page.**
-3. **Web app: Transactions page** (filterable by type and date range).
-4. **Web app: Fees, Income, Performance, Data Health pages.**
-5. `ingest_transactions.py`: currently only warns (doesn't fail loudly) on
+2. **Web app: Performance and Data Health pages** (Overview, Positions,
+   Transactions, Fees, and Income are all done now).
+3. `ingest_transactions.py`: currently only warns (doesn't fail loudly) on
    a sheet that doesn't match any known tab format - a wrong file can
    silently "succeed" with 0 rows loaded rather than erroring. Fix to fail
    loudly instead.
-6. Modified Dietz return calc (`load_endowus_statement()`) still assumes
+4. Modified Dietz return calc (`load_endowus_statement()`) still assumes
    the Joint account's cash-deduction fee mechanism - not yet updated for
    CPF/SRS goals' different (unit-sale) fee mechanism.
-7. Endowus lacks auto-detection of which account (Joint vs Single) a
+5. Endowus lacks auto-detection of which account (Joint vs Single) a
    statement belongs to - unlike CDP, which resolves this from the
    statement's own printed account number. Currently requires specifying
    `account_native_code=` explicitly in code.
-8. DBS CPFIS-OA/SRS transaction-level detail not loaded (deferred by
+6. DBS CPFIS-OA/SRS transaction-level detail not loaded (deferred by
    explicit agreement, not an oversight): the per-transaction fees DBS
    charges for moving money to a broker (TRANSACTION FEE, GST on PLACE/
    WITHDRAW FUND MGT transfers) are real costs, just not captured yet,
    since the transaction history for those sections is skipped entirely
    this phase.
-9. Watch DBS's CPFIS-OA/SRS totals once Dollardex money finishes migrating
+7. Watch DBS's CPFIS-OA/SRS totals once Dollardex money finishes migrating
    to Endowus (in progress as of July 2026 - the "Navigator" placement was
    already down to $0.02): DBS's total should stay roughly flat as money
    moves between brokers, while Endowus's CPF/SRS positions grow to
    reflect it. If DBS's total doesn't track this as expected, the
    exclusion logic in `ingest_dbs_pdf.py` (currently keyed on matching
    "UOB KAY HIAN"/"NAVIGATOR" by name) may need revisiting.
-10. Overview page polish: sort accounts by institution then account number
+8. Overview page polish: sort accounts by institution then account number
    (currently alphabetical by internal ID, which doesn't order UBS 1-4
    correctly); Endowus Joint's display label shouldn't show the email
    address.
-11. Asset class labels differ by institution (UBS: "Equities - Equity
+9. Asset class labels differ by institution (UBS: "Equities - Equity
    investments", CDP: "Equities", Endowus: "Equity Fund") - not normalized
    into one taxonomy; shows as separate rows in asset allocation today.
+   Concrete design agreed for the fix: group into parent categories
+   (Equities, Bonds/Fixed Income, etc.) on the Overview page, with each
+   parent's sub-labels shown underneath it and a total % column for the
+   parent group as a whole - not just a flat relabeling, an actual
+   hierarchy.
+10. Positions/Transactions/Fees/Income pages: the Date column is too
+   narrow, wrapping to two lines. Needs a wider fixed column (or
+   white-space: nowrap) - quick CSS fix candidate.
+11. Transactions/Fees/Income pages: add an explicit yearly total/subtotal
+   view. Fees and Income already group by year as one dimension but don't
+   surface a clean "total for 2026" roll-up on its own; Transactions has
+   no year breakdown at all currently.
 12. CDP's December statements include an annual tax-summary section ("Other
    Dividends / Coupon / Capital Repayment / Redemption / Cash Distributions
    for the Period 1 Jan-31 Dec") covering the full calendar year, not just
