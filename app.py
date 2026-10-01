@@ -78,7 +78,50 @@ def positions():
     )
 
 
-STUB_PAGES = [p for p in NAV_PAGES[1:] if p[0] != "positions"]
+@app.route("/transactions")
+def transactions():
+    owner = _owner_from_request()
+    institution = request.args.get("institution") or None
+    txn_type = request.args.get("txn_type") or None
+    date_from = request.args.get("date_from") or None
+    date_to = request.args.get("date_to") or None
+    conn = get_connection()
+    institutions = reports.list_institutions(conn)
+    txn_types = reports.list_txn_types(conn)
+    if institution and institution not in institutions:
+        institution = None
+    if txn_type and txn_type not in txn_types:
+        txn_type = None
+    data = reports.get_transactions(conn, owner, institution_filter=institution,
+                                     txn_type_filter=txn_type, date_from=date_from, date_to=date_to)
+    conn.close()
+    return render_template(
+        "transactions.html", active_page="transactions", owner=owner,
+        data=data, institutions=institutions, current_institution=institution,
+        txn_types=txn_types, current_txn_type=txn_type,
+        date_from=date_from or "", date_to=date_to or "",
+    )
+
+
+@app.route("/fees")
+def fees():
+    owner = _owner_from_request()
+    conn = get_connection()
+    data = reports.get_fees(conn, owner)
+    conn.close()
+    return render_template("fees.html", active_page="fees", owner=owner, data=data)
+
+
+@app.route("/income")
+def income():
+    owner = _owner_from_request()
+    conn = get_connection()
+    data = reports.get_income(conn, owner)
+    conn.close()
+    return render_template("income.html", active_page="income", owner=owner, data=data)
+
+
+STUB_PAGES = [p for p in NAV_PAGES[1:] if p[0] not in ("positions", "transactions", "fees", "income")]
 for slug, label in STUB_PAGES:
     def _make_stub(slug=slug, label=label):
         def _stub():

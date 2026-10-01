@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Transactions {% if owner %}<span class="owner-badge">{{ owner }}'s share</span>{% else %}<span class="owner-badge">Consolidated</span>{% endif %}</h1>
+
+  {% if data.unknown_ownership_accounts %}
+    <div class="warning">
+      Ownership not configured for: {{ data.unknown_ownership_accounts | join(', ') }} -
+      excluded from this {{ owner }} view.
+    </div>
+  {% endif %}
+
+  <div class="filter-bar">
+    <span>Institution:</span>
+    <a href="?{% if owner %}owner={{ owner }}{% endif %}"
+       class="{{ 'active' if not current_institution else '' }}">All</a>
+    {% for inst in institutions %}
+      <a href="?institution={{ inst }}{% if owner %}&owner={{ owner }}{% endif %}"
+         class="{{ 'active' if current_institution == inst else '' }}">{{ inst }}</a>
+    {% endfor %}
+  </div>
+
+  <div class="filter-bar">
+    <span>Type:</span>
+    <a href="?{% if current_institution %}institution={{ current_institution }}&{% endif %}{% if owner %}owner={{ owner }}{% endif %}"
+       class="{{ 'active' if not current_txn_type else '' }}">All</a>
+    {% for tt in txn_types %}
+      <a href="?txn_type={{ tt }}{% if current_institution %}&institution={{ current_institution }}{% endif %}{% if owner %}&owner={{ owner }}{% endif %}"
+         class="{{ 'active' if current_txn_type == tt else '' }}">{{ tt }}</a>
+    {% endfor %}
+  </div>
+
+  <form method="get" class="filter-bar">
+    {% if current_institution %}<input type="hidden" name="institution" value="{{ current_institution }}">{% endif %}
+    {% if current_txn_type %}<input type="hidden" name="txn_type" value="{{ current_txn_type }}">{% endif %}
+    {% if owner %}<input type="hidden" name="owner" value="{{ owner }}">{% endif %}
+    <span>Date range:</span>
+    <input type="date" name="date_from" value="{{ date_from }}">
+    <span>to</span>
+    <input type="date" name="date_to" value="{{ date_to }}">
+    <button type="submit">Apply</button>
+    {% if date_from or date_to %}<a href="?{% if current_institution %}institution={{ current_institution }}&{% endif %}{% if current_txn_type %}txn_type={{ current_txn_type }}&{% endif %}{% if owner %}owner={{ owner }}{% endif %}">Clear dates</a>{% endif %}
+  </form>
+
+  <section>
+    <h2>Net: {{ "{:,.0f}".format(data.total_sgd) }} SGD <span class="hint">({{ data.rows | length }} rows)</span></h2>
+  </section>
+
+  <section>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th><th>Account</th><th>Institution</th><th>Leg</th>
+          <th>Type</th><th>Subtype</th><th>Instrument</th><th>Description</th>
+          <th class="num">Qty</th><th class="num">Price</th>
+          <th class="num">Amount (Native)</th><th class="num">Amount (SGD)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in data.rows %}
+        <tr>
+          <td>{{ t.trade_date }}</td>
+          <td>{{ t.display_code }}</td>
+          <td>{{ t.institution_id }}</td>
+          <td>{{ t.source_leg }}</td>
+          <td>{{ t.txn_type }}</td>
+          <td>{{ t.txn_subtype or "-" }}</td>
+          <td>{{ t.instrument_name or "-" }}</td>
+          <td>{{ t.description or "-" }}</td>
+          <td class="num">{{ "{:,.2f}".format(t.quantity) if t.quantity is not none else "-" }}</td>
+          <td class="num">{{ "{:,.4f}".format(t.price) if t.price is not none else "-" }}</td>
+          <td class="num">{{ "{:,.2f}".format(t.amount_native) if t.amount_native is not none else "-" }} {{ t.currency }}</td>
+          <td class="num">{{ "{:,.2f}".format(t.amount_sgd) if t.amount_sgd is not none else "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

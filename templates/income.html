@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Income {% if owner %}<span class="owner-badge">{{ owner }}'s share</span>{% else %}<span class="owner-badge">Consolidated</span>{% endif %}</h1>
+
+  {% if data.unknown_ownership_accounts %}
+    <div class="warning">
+      Ownership not configured for: {{ data.unknown_ownership_accounts | join(', ') }} -
+      excluded from this {{ owner }} view.
+    </div>
+  {% endif %}
+
+  <section>
+    <h2>Total income: {{ "{:,.2f}".format(data.total_sgd) }} SGD</h2>
+  </section>
+
+  <section>
+    <table>
+      <thead>
+        <tr>
+          <th>Account</th><th>Institution</th><th>Year</th>
+          <th class="num"># Payments</th>
+          <th class="num">Amount (Native)</th><th class="num">Amount (SGD)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for i in data.rows %}
+        <tr>
+          <td>{{ i.display_code }}</td>
+          <td>{{ i.institution_id }}</td>
+          <td>{{ i.year }}</td>
+          <td class="num">{{ i.n }}</td>
+          <td class="num">{{ "{:,.2f}".format(i.amount_native) }} {{ i.currency }}</td>
+          <td class="num">{{ "{:,.2f}".format(i.amount_sgd) if i.amount_sgd is not none else "-" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="5">TOTAL</td>
+          <td class="num">{{ "{:,.2f}".format(data.total_sgd) }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </section>
+{% endblock %}

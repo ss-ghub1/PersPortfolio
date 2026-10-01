@@ -189,6 +189,140 @@ def get_positions(conn, owner=None, institution_filter=None, account_filter=None
     return {"rows": rows, "total_sgd": total_sgd, "unknown_ownership_accounts": sorted(unknown)}
 
 
+def list_txn_types(conn):
+    return [r[0] for r in conn.execute("SELECT DISTINCT txn_type FROM txn ORDER BY txn_type")]
+
+
+def get_transactions(conn, owner=None, institution_filter=None, account_filter=None,
+                      txn_type_filter=None, date_from=None, date_to=None):
+    """Returns {"rows": [...], "total_sgd": float, "unknown_ownership_accounts": [...]}.
+    Raw transaction listing - both SECURITY and CASH legs shown as distinct
+    rows (unlike get_fees/get_income, this doesn't dedupe between legs,
+    since this is a listing of what's actually in the database, not an
+    aggregate total where double-counting would matter)."""
+    ownership = load_ownership()
+    query = """
+        SELECT t.account_id, t.source_leg, t.trade_date, t.txn_type, t.txn_subtype,
+               t.currency, t.quantity, t.price, t.gross_amount, t.raw_description,
+               t.raw_txn_type_label, i.name AS instrument_name,
+               a.institution_id, a.display_code
+        FROM txn t
+        JOIN account a ON a.account_id = t.account_id
+        LEFT JOIN instrument i ON i.instrument_id = t.instrument_id
+        WHERE 1=1
+    """
+    params = []
+    if institution_filter:
+        query += " AND a.institution_id = ?"
+        params.append(institution_filter)
+    if account_filter:
+        query += " AND t.account_id = ?"
+        params.append(account_filter)
+    if txn_type_filter:
+        query += " AND t.txn_type = ?"
+        params.append(txn_type_filter)
+    if date_from:
+        query += " AND t.trade_date >= ?"
+        params.append(date_from)
+    if date_to:
+        query += " AND t.trade_date <= ?"
+        params.append(date_to)
+    query += " ORDER BY t.trade_date DESC, t.account_id"
+
+    rows, total_sgd, unknown = [], 0.0, set()
+    for r in conn.execute(query, params).fetchall():
+        weight = 1.0
+        if owner:
+            w = ownership_weight(ownership, r["account_id"], owner)
+            if w is None:
+                unknown.add(r["account_id"])
+                continue
+            weight = w
+
+        rate = get_fx_rate(conn, r["currency"])
+        amount_sgd = (r["gross_amount"] * rate * weight) if rate and r["gross_amount"] is not None else None
+
+        rows.append({
+            "account_id": r["account_id"], "institution_id": r["institution_id"],
+            "display_code": r["display_code"] or r["account_id"],
+            "source_leg": r["source_leg"], "trade_date": r["trade_date"],
+            "txn_type": r["txn_type"], "txn_subtype": r["txn_subtype"],
+            "instrument_name": r["instrument_name"],
+            "description": r["raw_description"] or r["raw_txn_type_label"],
+            "currency": r["currency"], "quantity": r["quantity"], "price": r["price"],
+            "amount_native": r["gross_amount"], "amount_sgd": amount_sgd,
+        })
+        if amount_sgd is not None:
+            total_sgd += amount_sgd
+
+    return {"rows": rows, "total_sgd": total_sgd, "unknown_ownership_accounts": sorted(unknown)}
+
+
+def _leg_preferred_query(txn_type):
+    """Shared CASH-preferred/SECURITY-fallback pattern, ported from
+    demo_reports.py: avoids double-counting fees/income that exist on both
+    legs for most institutions, while still picking up accounts (e.g.
+    Endowus Single's CPF/SRS goals) where SECURITY is the only leg that
+    carries this txn_type at all."""
+    return f"""
+        AND (t.source_leg = 'CASH'
+             OR (t.source_leg = 'SECURITY' AND NOT EXISTS (
+                   SELECT 1 FROM txn t2 WHERE t2.account_id = t.account_id
+                     AND t2.txn_type = '{txn_type}' AND t2.source_leg = 'CASH')))
+    """
+
+
+def get_fees(conn, owner=None):
+    """Returns {"rows": [...], "total_sgd": float, "unknown_ownership_accounts": [...]}.
+    Grouped by account + subtype, matching demo_reports.py's shape."""
+    return _grouped_cash_report(conn, "FEE", owner, group_cols=["t.txn_subtype"])
+
+
+def get_income(conn, owner=None):
+    """Returns {"rows": [...], "total_sgd": float, "unknown_ownership_accounts": [...]}.
+    Grouped by account + year, matching demo_reports.py's shape."""
+    return _grouped_cash_report(conn, "INCOME", owner, group_cols=["substr(t.trade_date,1,4)"],
+                                 group_labels=["year"])
+
+
+def _grouped_cash_report(conn, txn_type, owner, group_cols, group_labels=None):
+    group_labels = group_labels or [c.split(".")[-1] for c in group_cols]
+    ownership = load_ownership()
+    query = f"""
+        SELECT t.account_id, a.institution_id, a.display_code,
+               {', '.join(f'{c} AS {l}' for c, l in zip(group_cols, group_labels))},
+               t.currency, round(sum(t.gross_amount), 2) AS total, count(*) n
+        FROM txn t JOIN account a ON a.account_id = t.account_id
+        WHERE t.txn_type = '{txn_type}'
+        {_leg_preferred_query(txn_type)}
+        GROUP BY t.account_id, {', '.join(group_cols)}, t.currency
+        ORDER BY a.institution_id, a.account_id
+    """
+    rows, total_sgd, unknown = [], 0.0, set()
+    for r in conn.execute(query).fetchall():
+        weight = 1.0
+        if owner:
+            w = ownership_weight(ownership, r["account_id"], owner)
+            if w is None:
+                unknown.add(r["account_id"])
+                continue
+            weight = w
+        rate = get_fx_rate(conn, r["currency"])
+        value_sgd = (r["total"] * rate * weight) if rate else None
+        row = {
+            "account_id": r["account_id"], "institution_id": r["institution_id"],
+            "display_code": r["display_code"] or r["account_id"],
+            "currency": r["currency"], "amount_native": r["total"], "n": r["n"],
+            "amount_sgd": value_sgd,
+        }
+        for label in group_labels:
+            row[label] = r[label]
+        rows.append(row)
+        if value_sgd is not None:
+            total_sgd += value_sgd
+    return {"rows": rows, "total_sgd": total_sgd, "unknown_ownership_accounts": sorted(unknown)}
+
+
 def list_institutions(conn):
     return [r[0] for r in conn.execute("SELECT DISTINCT institution_id FROM account ORDER BY institution_id")]
 
