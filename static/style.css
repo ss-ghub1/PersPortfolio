@@ -50,8 +50,8 @@ section { margin-bottom: 32px; }
 h2 { font-size: 1.3em; }
 h3 { color: #444; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
 table { width: 100%; border-collapse: collapse; background: white; }
-th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #eee; }
-th { background: #f0f2f5; font-size: 0.85em; text-transform: uppercase; color: #666; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.85em; }
+th { background: #f0f2f5; text-transform: uppercase; color: #666; font-size: 0.8em; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tfoot td { font-weight: bold; border-top: 2px solid #999; }
 .warning {
@@ -63,4 +63,15 @@ tfoot td { font-weight: bold; border-top: 2px solid #999; }
   font-size: 0.9em;
 }
 .warning code { background: #fff0d0; padding: 1px 5px; border-radius: 3px; }
+.filter-bar { margin-bottom: 20px; display: flex; gap: 8px; align-items: center; }
+.filter-bar span { color: #666; font-size: 0.9em; margin-right: 4px; }
+.filter-bar a {
+  color: #1f3864;
+  text-decoration: none;
+  padding: 4px 10px;
+  border: 1px solid #d0d6e0;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.filter-bar a.active { background: #1f3864; color: white; border-color: #1f3864; }
 .coming-soon { color: #888; font-style: italic; }
