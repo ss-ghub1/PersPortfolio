@@ -108,8 +108,9 @@ def fees():
     owner = _owner_from_request()
     conn = get_connection()
     data = reports.get_fees(conn, owner)
+    detail = reports.get_transactions(conn, owner, txn_type_filter="FEE")
     conn.close()
-    return render_template("fees.html", active_page="fees", owner=owner, data=data)
+    return render_template("fees.html", active_page="fees", owner=owner, data=data, detail=detail)
 
 
 @app.route("/income")
@@ -117,8 +118,9 @@ def income():
     owner = _owner_from_request()
     conn = get_connection()
     data = reports.get_income(conn, owner)
+    detail = reports.get_transactions(conn, owner, txn_type_filter="INCOME")
     conn.close()
-    return render_template("income.html", active_page="income", owner=owner, data=data)
+    return render_template("income.html", active_page="income", owner=owner, data=data, detail=detail)
 
 
 STUB_PAGES = [p for p in NAV_PAGES[1:] if p[0] not in ("positions", "transactions", "fees", "income")]
