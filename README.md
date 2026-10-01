@@ -399,6 +399,55 @@ the whole project - a fresh `.git` folder has no remote configured, and
 overwriting your existing `.git` loses it, requiring `git remote add
 origin ...` again.
 
+## Known hardcoded assumptions
+
+A deliberate audit, not a list of bugs - some of these are fine as-is and
+just worth knowing about; a couple are real risks worth remembering when
+you hit them. Ordered by how much they could actually bite you.
+
+1. **`load_endowus_statement()` defaults to `account_native_code="Endowus
+   Joint"`.** This is the one with real silent-corruption risk: unlike
+   CDP, DBS, and IBKR (all of which resolve which account a statement
+   belongs to from the statement's own printed content), Endowus has no
+   such auto-detection. If you ever ran the plain CLI
+   (`python ingest_endowus_pdf.py <file> --load`) against the *Single*
+   statement without explicitly overriding the account, it would NOT
+   error - it would silently load Single's data under the Joint account.
+   The reconciliation gates wouldn't catch this either, since they only
+   validate a statement's own internal math, never "does this content
+   actually belong to the account it's being attributed to." This is
+   exactly why loading Single needs the longer `python -c "..."`
+   one-liner with an explicit `account_native_code=` instead of the plain
+   CLI - see the monthly workflow commands. Tracked as to-do item 7
+   (Endowus needs the same auto-detection CDP already has).
+
+2. **DBS's UOB-Kay-Hian/Navigator exclusion is matched by hardcoded name
+   strings**, not a general rule: `EXCLUDE_NAMES = ("FUND MGT - UOB KAY
+   HIAN", "FUND MGT - NAVIGATOR", "UOB KAY HIAN PTE LTD")` in
+   `ingest_dbs_pdf.py`. This correctly encodes a real, current business
+   decision (excluding money double-tracked via Endowus Single during the
+   Dollardex migration - see the DBS section above), but it's literal-text
+   matching. If DBS ever rewords that line item, or a new broker placement
+   appears, this exclusion silently stops applying - no error, since this
+   isn't something a reconciliation gate would catch (the gate validates
+   that parsing is *complete*, not that the inclusion/exclusion *decision*
+   is still correct). Related to to-do item 9 (watch DBS's CPFIS/SRS
+   totals as the Dollardex migration completes) - if that item's check
+   ever looks wrong, this is the first place to look.
+
+3. **Endowus's funding-source vocabulary is a fixed, known list**:
+   `FUNDING_SOURCE = r"(SGD Cash|CPF OA|CPF SA|SRS)"`. Safer failure mode
+   than #2 - an unrecognized funding source would fail to match that row
+   entirely (loud, via the reconciliation gates) rather than silently
+   mis-tagging it. Would need a code change, not just a config edit, if a
+   statement ever introduces a funding source we haven't seen (e.g. a
+   different CPF sub-account).
+
+4. **SGD is hardcoded as the reporting currency** in a few places
+   (`export_excel.py`'s FX lookups specifically). Fine as long as SGD
+   stays the reporting currency; would need actual code changes, not
+   config, if that ever changed.
+
 ## Not built yet (next steps, roughly in order)
 
 1. **Directory-based ingestion wrapper** (agreed design, not yet built):
