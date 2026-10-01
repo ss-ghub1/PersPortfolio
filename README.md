@@ -346,10 +346,20 @@ origin ...` again.
 8. Asset class labels differ by institution (UBS: "Equities - Equity
    investments", CDP: "Equities", Endowus: "Equity Fund") - not normalized
    into one taxonomy; shows as separate rows in asset allocation today.
-9. `performance.py`: the Endowus period return is computed and stored but
-   not yet printed in the CLI report; the report header text still says
-   "UBS's own statement TWR" for every account regardless of institution.
-10. **Deferred, larger decisions** (do once the basic web app design is
+9. CDP's December statements include an annual tax-summary section ("Other
+   Dividends / Coupon / Capital Repayment / Redemption / Cash Distributions
+   for the Period 1 Jan-31 Dec") covering the full calendar year, not just
+   December. Never parse this as a transaction source (every event in it
+   is also in that month's own Cash Transaction section, so loading both
+   would double-count income) - but once a full calendar year of monthly
+   CDP statements is loaded, sum whatever income was recorded that year
+   and compare against this section's stated total as a pure validation
+   check (never writes a transaction, so it can't double-count anything).
+   Not useful until enough months exist to check against.
+10. `performance.py`: the Endowus period return is computed and stored but
+    not yet printed in the CLI report; the report header text still says
+    "UBS's own statement TWR" for every account regardless of institution.
+11. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,
