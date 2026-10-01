@@ -241,6 +241,42 @@ Notable things specific to this one:
 python3 ingest_ibkr_pdf.py /path/to/statement.pdf --load
 ```
 
+**DBS** (4 accounts: Multiplier (SS), CPFIS-OA (SS), SRS (SS), POSB eSavings
+(joint)) - a real text-layer "Consolidated Statement" PDF bundling several
+very different things in one document. Handled by `ingest_dbs_pdf.py`.
+```bash
+python3 ingest_dbs_pdf.py /path/to/statement.pdf --load
+```
+Scope is deliberately narrower than what the statement actually contains -
+agreed before any code was written, not discovered after:
+- Multiplier/POSB eSavings: full parse, cash positions + complete
+  transaction history, same pattern as every other cash ledger here.
+- CPFIS-OA/SRS: **positions only** this phase (no transaction history -
+  the per-transaction DBS fees for moving money to a broker are deferred).
+  Within positions, a deliberate subset: cash balance and direct holdings
+  are included, but money placed with UOB Kay Hian is EXCLUDED - it's the
+  original cost basis for money also tracked, at its current and more
+  accurate market value, by Endowus Single (confirmed: both statements
+  reference the same UOB Kay Hian account number). Loading both would
+  double-count the same capital at two different points in time.
+- Mortgage loan: fully excluded, no liability tracking anywhere in this
+  project. The payment itself still shows as an ordinary cash outflow in
+  the Multiplier Account's own ledger - nothing special needed there.
+
+Reconciliation runs two gates: cash-block replay (per account/currency),
+and - importantly - the CPF/SRS section parses and validates EVERY line
+(including the excluded ones) against each subsection's own stated
+"Total:" line, which checks extraction correctness independent of the
+inclusion/exclusion decision. This gate caught four real bugs during
+development, including one near-identical in spirit to the Endowus Single
+bug: a holdings table spanning a page break, where the continuation line
+contained the true section header as a substring and silently reset
+parser state, dropping a whole holding (Singapore Life, $116,000) with no
+error. Worth treating as a standing lesson, not a one-off: any time a
+table might continue across a page break, check whether its continuation
+marker could collide with a real section-boundary check elsewhere in the
+parser.
+
 ## Extending to a new institution
 
 Two paths, depending on what that institution actually offers:
@@ -335,11 +371,17 @@ section above.
 
 ## Current status snapshot
 
-4 institutions, 10 accounts, all reconciled: UBS (4), Endowus (2: Joint and
+5 institutions, 14 accounts, all reconciled: UBS (4), Endowus (2: Joint and
 Single - the latter is CPF/SRS-funded, mixing funding sources at the goal
-level), CDP (2: 0388 and 9563), IBKR (2). Total ~5,349,653 SGD as of the
-last full load (July 2026 statements, except CDP which also has a December
-2025 statement loaded). Review queue empty across all institutions.
+level), CDP (2: 0388 and 9563), IBKR (2), DBS (4: Multiplier, CPFIS-OA,
+SRS, POSB eSavings). Total ~5,686,293 SGD as of the last full load (July
+2026 statements, except CDP which also has a December 2025 statement
+loaded). Review queue empty across all institutions.
+
+This completes the original 6-institution scope except CPF itself as a
+standalone source - DBS's CPFIS-OA/SRS sections cover the CPF/SRS data
+that's actually in scope for now (see DBS section above for the deliberate
+exclusions and why).
 
 Endowus's reconciliation now runs THREE independent gates (cash-balance
 replay, per-goal identity, allocation-vs-overview cross-check) rather than
@@ -347,7 +389,8 @@ one - see the Endowus section above for why the first gate alone is
 meaningless for CPF/SRS-funded goals, and why the third gate exists at all
 (it's the one that would have caught two entire goals silently vanishing
 from a real load - see git history on the "Add Endowus Single" commit for
-the full story).
+the full story). DBS's second gate (CPF/SRS subsection-total validation)
+is built on the same principle and caught a near-identical bug there too.
 
 Git repo `PersPortfolio` pushed to `github.com/ss-ghub1/PersPortfolio`,
 `main` branch. When syncing changes from this project to your local clone,
@@ -386,14 +429,27 @@ origin ...` again.
    statement belongs to - unlike CDP, which resolves this from the
    statement's own printed account number. Currently requires specifying
    `account_native_code=` explicitly in code.
-8. Overview page polish: sort accounts by institution then account number
+8. DBS CPFIS-OA/SRS transaction-level detail not loaded (deferred by
+   explicit agreement, not an oversight): the per-transaction fees DBS
+   charges for moving money to a broker (TRANSACTION FEE, GST on PLACE/
+   WITHDRAW FUND MGT transfers) are real costs, just not captured yet,
+   since the transaction history for those sections is skipped entirely
+   this phase.
+9. Watch DBS's CPFIS-OA/SRS totals once Dollardex money finishes migrating
+   to Endowus (in progress as of July 2026 - the "Navigator" placement was
+   already down to $0.02): DBS's total should stay roughly flat as money
+   moves between brokers, while Endowus's CPF/SRS positions grow to
+   reflect it. If DBS's total doesn't track this as expected, the
+   exclusion logic in `ingest_dbs_pdf.py` (currently keyed on matching
+   "UOB KAY HIAN"/"NAVIGATOR" by name) may need revisiting.
+10. Overview page polish: sort accounts by institution then account number
    (currently alphabetical by internal ID, which doesn't order UBS 1-4
    correctly); Endowus Joint's display label shouldn't show the email
    address.
-9. Asset class labels differ by institution (UBS: "Equities - Equity
+11. Asset class labels differ by institution (UBS: "Equities - Equity
    investments", CDP: "Equities", Endowus: "Equity Fund") - not normalized
    into one taxonomy; shows as separate rows in asset allocation today.
-10. CDP's December statements include an annual tax-summary section ("Other
+12. CDP's December statements include an annual tax-summary section ("Other
    Dividends / Coupon / Capital Repayment / Redemption / Cash Distributions
    for the Period 1 Jan-31 Dec") covering the full calendar year, not just
    December. Never parse this as a transaction source (every event in it
@@ -403,10 +459,10 @@ origin ...` again.
    and compare against this section's stated total as a pure validation
    check (never writes a transaction, so it can't double-count anything).
    Not useful until enough months exist to check against.
-11. `performance.py`: the Endowus period return is computed and stored but
+13. `performance.py`: the Endowus period return is computed and stored but
     not yet printed in the CLI report; the report header text still says
     "UBS's own statement TWR" for every account regardless of institution.
-12. **Deferred, larger decisions** (do once the basic web app design is
+14. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,

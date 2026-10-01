@@ -13,5 +13,10 @@
   "CDP-9563": [{"owner": "SV", "pct": 100}],
 
   "IBKR-U20780831": [{"owner": "SS", "pct": 100}],
-  "IBKR-U21032806": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}]
+  "IBKR-U21032806": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}],
+
+  "DBS-113-005102-1": [{"owner": "SS", "pct": 100}],
+  "DBS-022-059558-0-220": [{"owner": "SS", "pct": 100}],
+  "DBS-0001-001381-6-223": [{"owner": "SS", "pct": 100}],
+  "DBS-049-45295-0": [{"owner": "SS", "pct": 50}, {"owner": "SV", "pct": 50}]
 }

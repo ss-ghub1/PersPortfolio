@@ -60,10 +60,14 @@ def parse_statement(pdf_path):
 
     result = {
         "source_file": Path(pdf_path).name,
-        "period_label": None, "as_of_date": None,
+        "period_label": None, "as_of_date": None, "account_suffix": None,
         "summary": {}, "holdings": [], "bonds": [], "on_loan": [],
         "cash_transactions": [], "usd_sgd_rate": None,
     }
+
+    m = re.search(r"SECURITIES A/C NO\.\s*XXXX-XXXX-(\d{4})", text)
+    if m:
+        result["account_suffix"] = m.group(1)
 
     m = re.search(r"([A-Z]{3}) (\d{4})\s*PAGE 1/", text)
     if m:
@@ -170,7 +174,7 @@ def parse_statement(pdf_path):
 
 
 # ---------------------------------------------------------------------------
-def load_cdp_statement(pdf_path, conn, account_native_code="CDP 0388", force=False):
+def load_cdp_statement(pdf_path, conn, account_native_code=None, force=False):
     source_file = Path(pdf_path).name
     if not force and is_source_file_loaded(conn, "position_snapshot", source_file):
         print(f"[cdp] SKIPPED: '{source_file}' already loaded (use --force to reload anyway)")
@@ -179,6 +183,17 @@ def load_cdp_statement(pdf_path, conn, account_native_code="CDP 0388", force=Fal
     parsed = parse_statement(pdf_path)
     source_file = parsed["source_file"]
     summ = parsed["summary"]
+
+    # Resolve which CDP account this is from the statement's OWN printed
+    # account number (e.g. "XXXX-XXXX-9563"), unless the caller explicitly
+    # overrode it - avoids needing a CLI flag to say which of several CDP
+    # accounts a given file belongs to, and is safer than defaulting to one.
+    if account_native_code is None:
+        if not parsed["account_suffix"]:
+            print(f"[cdp] ABORT: could not read the account number from {source_file}'s own "
+                  f"text, and no account_native_code override was given.")
+            return None
+        account_native_code = f"CDP {parsed['account_suffix']}"
 
     # --- Reconciliation gate ---
     checks = []
@@ -283,6 +298,8 @@ def load_cdp_statement(pdf_path, conn, account_native_code="CDP 0388", force=Fal
             txn_type, subtype = "WITHDRAWAL", "PAYOUT_TO_DBS"
         elif "Dividend" in desc:
             txn_type, subtype = "INCOME", "DIVIDEND"
+        elif "Interest Payment" in desc:
+            txn_type, subtype = "INCOME", "BOND_INTEREST"
         elif "Lending Fee" in desc:
             txn_type, subtype = "INCOME", "SBL_LENDING_FEE"
         else:
