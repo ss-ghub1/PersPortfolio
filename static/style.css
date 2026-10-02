@@ -50,7 +50,7 @@ section { margin-bottom: 32px; }
 h2 { font-size: 1.3em; }
 h3 { color: #444; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
 table { width: 100%; border-collapse: collapse; background: white; }
-th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.85em; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.85em; vertical-align: top; }
 th { background: #f0f2f5; text-transform: uppercase; color: #666; font-size: 0.8em; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tfoot td { font-weight: bold; border-top: 2px solid #999; }
@@ -74,4 +74,12 @@ tfoot td { font-weight: bold; border-top: 2px solid #999; }
   font-size: 0.85em;
 }
 .filter-bar a.active { background: #1f3864; color: white; border-color: #1f3864; }
+.filter-bar input[type="date"] { padding: 4px 8px; border: 1px solid #d0d6e0; border-radius: 4px; font-size: 0.85em; }
+.filter-bar button { padding: 4px 12px; border: none; background: #1f3864; color: white; border-radius: 4px; cursor: pointer; font-size: 0.85em; }
+.filter-bar button:hover { background: #2d4a7a; }
+.nowrap { white-space: nowrap; }
+.hint { font-size: 0.5em; color: #888; font-weight: normal; }
+.row-review { background: #fff0f0; }
+.row-gap { background: #f5f5f5; color: #777; }
+.all-clear { color: #2a7a2a; font-weight: bold; }
 .coming-soon { color: #888; font-style: italic; }
