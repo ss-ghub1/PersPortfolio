@@ -464,60 +464,25 @@ you hit them. Ordered by how much they could actually bite you.
    detect Endowus by "OCR found no text layer" - that shortcut breaks the
    moment a second scanned-PDF institution exists. Use explicit branding-
    text matching for every institution, including Endowus, from the start.
-2. **Web app: Performance and Data Health pages** (Overview, Positions,
-   Transactions, Fees, and Income are all done now).
-   Data Health design agreed, ready to build:
-     a. Reconciliation results, direct from `reconciliation_log` - every
-        check every loader already writes (UBS cash replay + snapshot-vs-
-        ledger, IBKR NAV walk, CDP's 3 checks, Endowus's 3 gates, DBS's
-        cash blocks + CPF/SRS totals). Status shown as MISMATCH / Known
-        Gap for the 2 already-understood UBS mismatches (extract-timing
-        lag, stale USD ledger) vs MISMATCH / Review for anything else -
-        MISMATCH itself stays an honest, objective fact either way; the
-        suffix is our own classification on top, not a softer status.
-        Mechanism: a new `config/known_reconciliation_gaps.csv`
-        (account_id, check_scope, note), explicit config only - same
-        principle as `confirmed_transfers.csv` and
-        `account_ownership.json` elsewhere in this project (explicit
-        over inferred). A check only shows "Known Gap" if its
-        account+check combination is explicitly listed; anything new
-        defaults to "Review" with no risk of silently inheriting an old
-        label.
-     b. Review queue - transactions the classifier couldn't categorize
-        (UNCLASSIFIED/NEEDS_REVIEW). Currently empty everywhere - show
-        that plainly ("0 items - all classified") rather than an empty
-        table that looks broken.
-     c. Data freshness per account - last position date + last-loaded
-        timestamp, finer-grained than Overview's per-institution version.
-     d. Ownership coverage check - flag any account in `accounts.csv`
-        with no matching entry in `account_ownership.json` (currently
-        this only surfaces as a missing number somewhere else in the
-        app, never as its own direct signal).
-3. `ingest_transactions.py`: currently only warns (doesn't fail loudly) on
-   a sheet that doesn't match any known tab format - a wrong file can
-   silently "succeed" with 0 rows loaded rather than erroring. Fix to fail
-   loudly instead.
-4. Modified Dietz return calc (`load_endowus_statement()`) still assumes
+2. **Web app: Performance page** (Overview, Positions, Transactions, Fees,
+   Income, and Data Health are all done now).
+3. Modified Dietz return calc (`load_endowus_statement()`) still assumes
    the Joint account's cash-deduction fee mechanism - not yet updated for
    CPF/SRS goals' different (unit-sale) fee mechanism.
-5. Endowus lacks auto-detection of which account (Joint vs Single) a
-   statement belongs to - unlike CDP, which resolves this from the
-   statement's own printed account number. Currently requires specifying
-   `account_native_code=` explicitly in code.
-6. DBS CPFIS-OA/SRS transaction-level detail not loaded (deferred by
+4. DBS CPFIS-OA/SRS transaction-level detail not loaded (deferred by
    explicit agreement, not an oversight): the per-transaction fees DBS
    charges for moving money to a broker (TRANSACTION FEE, GST on PLACE/
    WITHDRAW FUND MGT transfers) are real costs, just not captured yet,
    since the transaction history for those sections is skipped entirely
    this phase.
-7. Watch DBS's CPFIS-OA/SRS totals once Dollardex money finishes migrating
+5. Watch DBS's CPFIS-OA/SRS totals once Dollardex money finishes migrating
    to Endowus (in progress as of July 2026 - the "Navigator" placement was
    already down to $0.02): DBS's total should stay roughly flat as money
    moves between brokers, while Endowus's CPF/SRS positions grow to
    reflect it. If DBS's total doesn't track this as expected, the
    exclusion logic in `ingest_dbs_pdf.py` (currently keyed on matching
    "UOB KAY HIAN"/"NAVIGATOR" by name) may need revisiting.
-8. CDP's December statements include an annual tax-summary section ("Other
+6. CDP's December statements include an annual tax-summary section ("Other
    Dividends / Coupon / Capital Repayment / Redemption / Cash Distributions
    for the Period 1 Jan-31 Dec") covering the full calendar year, not just
    December. Never parse this as a transaction source (every event in it
@@ -527,14 +492,10 @@ you hit them. Ordered by how much they could actually bite you.
    and compare against this section's stated total as a pure validation
    check (never writes a transaction, so it can't double-count anything).
    Not useful until enough months exist to check against.
-9. `performance.py`: the Endowus period return is computed and stored but
+7. `performance.py`: the Endowus period return is computed and stored but
     not yet printed in the CLI report; the report header text still says
     "UBS's own statement TWR" for every account regardless of institution.
-10. Positions page: "On Loan" is its own column but only ever populated for
-    CDP holdings - wasted space for every other institution's rows.
-    Consider showing it as a second, indented sub-row under the position
-    instead (e.g. "  -> 2,000 on loan"), freeing up that column entirely.
-11. **Deferred, larger decisions** (do once the basic web app design is
+8. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,

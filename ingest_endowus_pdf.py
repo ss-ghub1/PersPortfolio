@@ -372,6 +372,33 @@ def parse_cash_balance(pages_text):
 
 
 # ---------------------------------------------------------------------------
+# Explicit account identification by email - this document's footer
+# repeats the account holder's email on every single page (e.g.
+# "in.sgsr@gmail.com Page 25 out of 66"), which is a reliable, repeating
+# signal to auto-detect which Endowus account a statement belongs to,
+# unlike CDP/DBS/IBKR, none of which print anything this directly
+# identifying. Explicit mapping only, same principle as every other
+# config-driven lookup in this project - an unrecognized email aborts
+# rather than silently guessing (see load_endowus_statement()).
+EMAIL_TO_ACCOUNT = {
+    "in.sgsr@gmail.com": "Endowus Joint",
+    "subsun.sg@gmail.com": "Endowus Single",
+}
+
+
+def _extract_account_email(pages_text):
+    # OCR sometimes introduces spacing artifacts around '@' and '.' (seen
+    # on the Single account's footer: "subsun.sg @ gmail.com" instead of
+    # a clean string) - tolerate optional whitespace there, then strip it
+    # from the result before using it for lookup.
+    email_re = re.compile(r"[\w.+-]+\s*@\s*[\w-]+\s*\.\s*\w+")
+    for text in pages_text:
+        m = email_re.search(text)
+        if m:
+            return re.sub(r"\s+", "", m.group(0))
+    return None
+
+
 def parse_statement(pdf_path):
     pages_text = ocr_pages(pdf_path)
 
@@ -429,6 +456,7 @@ def parse_statement(pdf_path):
         "cash_balance": parse_cash_balance(pages_text),
         "headline": headline,
         "source_file": Path(pdf_path).name,
+        "account_email": _extract_account_email(pages_text),
     }
 
 
@@ -451,7 +479,7 @@ def modified_dietz(bmv, emv, flows, period_start, period_end):
 
 
 # ---------------------------------------------------------------------------
-def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint", force=False):
+def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False):
     source_file = Path(pdf_path).name
     if not force and is_source_file_loaded(conn, "position_snapshot", source_file):
         print(f"[endowus] SKIPPED: '{source_file}' already loaded (use --force to reload anyway) "
@@ -460,6 +488,22 @@ def load_endowus_statement(pdf_path, conn, account_native_code="Endowus Joint", 
 
     parsed = parse_statement(pdf_path)
     source_file = parsed["source_file"]
+
+    # Resolve which Endowus account this is from the statement's own
+    # footer email, unless the caller explicitly overrode it - closes the
+    # risk the old hardcoded default ("Endowus Joint") carried: forgetting
+    # to pass account_native_code for a Single-account statement used to
+    # silently load it under Joint instead, with no error at all.
+    if account_native_code is None:
+        email = parsed["account_email"]
+        if not email or email not in EMAIL_TO_ACCOUNT:
+            print(f"[endowus] ABORT: could not identify which Endowus account {source_file} "
+                  f"belongs to (footer email: {email!r}, not in the known mapping) - and no "
+                  f"account_native_code override was given. Not loading - if this is a genuinely "
+                  f"new Endowus account, add its email to EMAIL_TO_ACCOUNT first.")
+            return None
+        account_native_code = EMAIL_TO_ACCOUNT[email]
+        print(f"[endowus] Auto-detected account from footer email ({email}): {account_native_code}")
 
     # --- Gate on reconciliation before touching the database. OCR is far
     # less trustworthy than the UBS text-layer extracts, so a statement
