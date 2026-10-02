@@ -448,6 +448,42 @@ you hit them. Ordered by how much they could actually bite you.
    stays the reporting currency; would need actual code changes, not
    config, if that ever changed.
 
+## Known issue: Endowus changed its statement format (August 2026)
+
+Confirmed via direct inspection, not assumed: both Joint's and Single's
+August 2026 statements use a different page structure than the July ones
+`ingest_endowus_pdf.py` was built against - every page classifies as
+`OTHER` under the current parser, and loading either account's August
+statement aborts (`could not find cash starting/ending balance`) rather
+than silently loading anything wrong. Confirmed platform-wide (both
+accounts show the identical new structure), not account-specific.
+
+What changed, old -> new:
+- "All Investment Goals" -> "Table of contents" + "Goals summary (by
+  currency / by goal / footnotes)" as separate pages
+- "Aggregated Asset Allocation" -> "Aggregated asset allocation"; per-goal
+  allocation pages also appear to have lost their goal-name header
+- **Per-goal transaction pages -> one single "Completed transactions for
+  all goals" page** - the most structurally significant change, since the
+  whole SECURITY-leg parsing approach assumes one page per goal
+- "Cash Balance" -> "Cash balance overview" + separate "Cash balance
+  (SGD)" pages
+
+Deliberately holding off on any parser changes until confirming whether
+this is a permanent platform change or a one-off - check whichever
+statement comes after August next. If the new format persists, this
+becomes real work (comparable in scope to the original Endowus build,
+not a quick patch) and needs a scoping conversation before starting -
+see the three options discussed (full new-format support; hold off on
+Endowus entirely for now; or a partial build - positions only, skipping
+transactions/cash detail, similar to the gap already accepted for DBS's
+CPFIS/SRS).
+
+In the meantime: do NOT load any Endowus statement using this new format
+with the current parser - it already fails safely (aborts rather than
+loading wrong data), so there's no risk, just don't assume a workaround
+exists yet.
+
 ## Not built yet (next steps, roughly in order)
 
 1. **Directory-based ingestion wrapper** (agreed design, not yet built):
