@@ -517,11 +517,7 @@ you hit them. Ordered by how much they could actually bite you.
    reflect it. If DBS's total doesn't track this as expected, the
    exclusion logic in `ingest_dbs_pdf.py` (currently keyed on matching
    "UOB KAY HIAN"/"NAVIGATOR" by name) may need revisiting.
-8. Overview page polish: sort accounts by institution then account number
-   (currently alphabetical by internal ID, which doesn't order UBS 1-4
-   correctly); Endowus Joint's display label shouldn't show the email
-   address.
-9. CDP's December statements include an annual tax-summary section ("Other
+8. CDP's December statements include an annual tax-summary section ("Other
    Dividends / Coupon / Capital Repayment / Redemption / Cash Distributions
    for the Period 1 Jan-31 Dec") covering the full calendar year, not just
    December. Never parse this as a transaction source (every event in it
@@ -531,14 +527,14 @@ you hit them. Ordered by how much they could actually bite you.
    and compare against this section's stated total as a pure validation
    check (never writes a transaction, so it can't double-count anything).
    Not useful until enough months exist to check against.
-10. `performance.py`: the Endowus period return is computed and stored but
+9. `performance.py`: the Endowus period return is computed and stored but
     not yet printed in the CLI report; the report header text still says
     "UBS's own statement TWR" for every account regardless of institution.
-11. Positions page: "On Loan" is its own column but only ever populated for
+10. Positions page: "On Loan" is its own column but only ever populated for
     CDP holdings - wasted space for every other institution's rows.
     Consider showing it as a second, indented sub-row under the position
     instead (e.g. "  -> 2,000 on loan"), freeing up that column entirely.
-12. **Deferred, larger decisions** (do once the basic web app design is
+11. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,

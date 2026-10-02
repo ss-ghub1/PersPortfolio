@@ -91,7 +91,7 @@ def get_account_values(conn, owner=None):
         if weighted_sgd is not None:
             total_sgd += weighted_sgd
 
-    rows.sort(key=lambda r: -(r["value_sgd"] or 0))
+    rows.sort(key=lambda r: (r["institution_id"], r["account_id"]))
     return {"rows": rows, "total_sgd": total_sgd, "unknown_ownership_accounts": unknown}
 
 
