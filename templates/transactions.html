@@ -61,7 +61,7 @@
         {% for t in data.rows %}
         <tr>
           <td class="nowrap">{{ t.trade_date }}</td>
-          <td>{{ t.display_code }}</td>
+          <td class="nowrap">{{ t.display_code }}</td>
           <td>{{ t.source_leg }}</td>
           <td>{{ t.txn_type }}</td>
           <td>{{ t.txn_subtype or "-" }}</td>
