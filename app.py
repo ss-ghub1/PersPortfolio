@@ -67,12 +67,13 @@ def overview():
     owner = _owner_from_request()
     conn = get_connection()
     accounts = reports.get_account_values(conn, owner)
+    prior_month = reports.get_prior_month_values(conn, owner)
     allocation = reports.get_asset_allocation(conn, owner)
     last_loaded = reports.get_last_loaded_by_institution(conn)
     conn.close()
     return render_template(
         "overview.html", active_page="overview", owner=owner,
-        accounts=accounts, allocation=allocation, last_loaded=last_loaded,
+        accounts=accounts, prior_month=prior_month, allocation=allocation, last_loaded=last_loaded,
     )
 
 
@@ -121,25 +122,43 @@ def transactions():
 @app.route("/fees")
 def fees():
     owner = _owner_from_request()
+    institution = request.args.get("institution") or None
+    date_from = request.args.get("date_from") or None
+    date_to = request.args.get("date_to") or None
     conn = get_connection()
-    data = reports.get_fees(conn, owner)
-    detail = reports.get_transactions(conn, owner, txn_type_filter="FEE")
+    institutions = reports.list_institutions(conn)
+    if institution and institution not in institutions:
+        institution = None
+    data = reports.get_fees(conn, owner, institution_filter=institution, date_from=date_from, date_to=date_to)
+    detail = reports.get_transactions(conn, owner, institution_filter=institution,
+                                       txn_type_filter="FEE", date_from=date_from, date_to=date_to)
     yearly = reports.yearly_rollup(data["rows"], year_key="year")
     conn.close()
     return render_template("fees.html", active_page="fees", owner=owner,
-                            data=data, detail=detail, yearly=yearly)
+                            data=data, detail=detail, yearly=yearly,
+                            institutions=institutions, current_institution=institution,
+                            date_from=date_from or "", date_to=date_to or "")
 
 
 @app.route("/income")
 def income():
     owner = _owner_from_request()
+    institution = request.args.get("institution") or None
+    date_from = request.args.get("date_from") or None
+    date_to = request.args.get("date_to") or None
     conn = get_connection()
-    data = reports.get_income(conn, owner)
-    detail = reports.get_transactions(conn, owner, txn_type_filter="INCOME")
+    institutions = reports.list_institutions(conn)
+    if institution and institution not in institutions:
+        institution = None
+    data = reports.get_income(conn, owner, institution_filter=institution, date_from=date_from, date_to=date_to)
+    detail = reports.get_transactions(conn, owner, institution_filter=institution,
+                                       txn_type_filter="INCOME", date_from=date_from, date_to=date_to)
     yearly = reports.yearly_rollup(data["rows"], year_key="year")
     conn.close()
     return render_template("income.html", active_page="income", owner=owner,
-                            data=data, detail=detail, yearly=yearly)
+                            data=data, detail=detail, yearly=yearly,
+                            institutions=institutions, current_institution=institution,
+                            date_from=date_from or "", date_to=date_to or "")
 
 
 @app.route("/data_health")

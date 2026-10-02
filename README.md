@@ -341,10 +341,18 @@ templates around them. When Phase 2 adds an interactive JS layer, it can
 call the same functions and `jsonify()` the result instead, with no
 duplicated query logic.
 
-**Built so far:** Overview page only (value by account, asset allocation,
-last-loaded date per institution). The other 6 nav items (Positions,
-Transactions, Fees, Income, Performance, Data Health) are wired into the
-nav bar as placeholder pages, not yet built.
+**Built so far:** Overview, Positions, Transactions, Fees, Income, and
+Data Health are all built. Only Performance remains a placeholder.
+
+**Overview's "Prior Month (SGD)" column**: the calendar month immediately
+before each account's own current period (UBS from
+`account_valuation_history`; every other institution from
+`position_snapshot`, since each monthly statement IS that institution's
+position snapshot). Deliberately uses the latest available FX rate rather
+than a historical rate from that prior month - checked first and
+confirmed historical dated rates aren't reliably available (see to-do
+item 8). Flagged visibly in the UI, not silently assumed accurate. Blank
+when that account's prior month hasn't been loaded.
 
 **Ownership toggle**: Consolidated / SS / SV, via `?owner=` query param.
 Backed by `config/account_ownership.json` - **explicit config only, never
@@ -531,7 +539,14 @@ exists yet.
 7. `performance.py`: the Endowus period return is computed and stored but
     not yet printed in the CLI report; the report header text still says
     "UBS's own statement TWR" for every account regardless of institution.
-8. **Deferred, larger decisions** (do once the basic web app design is
+8. Only UBS's position-snapshot loader writes to `fx_rate`; the other 4
+   institutions' loaders don't capture FX rates at all, even though each
+   of their own statements carries exactly the conversion data needed.
+   Having every loader capture its own dated rate would let features like
+   Overview's "Prior Month" column use the FX rate that was actually in
+   effect at that time, instead of today's rate (current, deliberate
+   simplification - see the Overview section above).
+9. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,

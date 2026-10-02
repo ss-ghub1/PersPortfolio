@@ -15,11 +15,15 @@
 
   <section>
     <h3>By account</h3>
+    <p class="hint-note">"Prior month" uses today's FX rate, not the rate
+      from that month - a currency-heavy account's apparent change can be
+      partly FX movement, not purely portfolio movement.</p>
     <table>
       <thead>
         <tr>
           <th>Account</th><th>Funding</th>
           <th class="num">Native value</th><th class="num">Value (SGD)</th>
+          <th class="num">Prior Month (SGD)</th>
           {% if owner %}<th class="num">Ownership</th>{% endif %}
           <th>As of</th>
         </tr>
@@ -31,6 +35,7 @@
           <td>{{ a.funding_source }}</td>
           <td class="num">{{ "{:,.0f}".format(a.native_value) }} {{ a.base_currency }}</td>
           <td class="num">{{ "{:,.0f}".format(a.value_sgd) if a.value_sgd is not none else "-" }}</td>
+          <td class="num">{{ "{:,.0f}".format(prior_month.get(a.account_id)) if prior_month.get(a.account_id) is not none else "-" }}</td>
           {% if owner %}<td class="num">{{ (a.ownership_weight * 100) | round(0, 'floor') | int }}%</td>{% endif %}
           <td class="nowrap">{{ a.as_of or "-" }}</td>
         </tr>
@@ -40,6 +45,7 @@
         <tr>
           <td colspan="3">TOTAL</td>
           <td class="num">{{ "{:,.0f}".format(accounts.total_sgd) }}</td>
+          <td></td>
           {% if owner %}<td></td>{% endif %}
           <td></td>
         </tr>

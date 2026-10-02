@@ -316,25 +316,39 @@ def _leg_preferred_query(txn_type):
     """
 
 
-def get_fees(conn, owner=None):
+def get_fees(conn, owner=None, institution_filter=None, date_from=None, date_to=None):
     """Returns {"rows": [...], "total_sgd": float, "unknown_ownership_accounts": [...]}.
     Grouped by account + subtype + year."""
     return _grouped_cash_report(conn, "FEE", owner,
                                  group_cols=["t.txn_subtype", "substr(t.trade_date,1,4)"],
-                                 group_labels=["txn_subtype", "year"])
+                                 group_labels=["txn_subtype", "year"],
+                                 institution_filter=institution_filter, date_from=date_from, date_to=date_to)
 
 
-def get_income(conn, owner=None):
+def get_income(conn, owner=None, institution_filter=None, date_from=None, date_to=None):
     """Returns {"rows": [...], "total_sgd": float, "unknown_ownership_accounts": [...]}.
     Grouped by account + year + subtype."""
     return _grouped_cash_report(conn, "INCOME", owner,
                                  group_cols=["substr(t.trade_date,1,4)", "t.txn_subtype"],
-                                 group_labels=["year", "txn_subtype"])
+                                 group_labels=["year", "txn_subtype"],
+                                 institution_filter=institution_filter, date_from=date_from, date_to=date_to)
 
 
-def _grouped_cash_report(conn, txn_type, owner, group_cols, group_labels=None):
+def _grouped_cash_report(conn, txn_type, owner, group_cols, group_labels=None,
+                          institution_filter=None, date_from=None, date_to=None):
     group_labels = group_labels or [c.split(".")[-1] for c in group_cols]
     ownership = load_ownership()
+    params = []
+    extra_where = ""
+    if institution_filter:
+        extra_where += " AND a.institution_id = ?"
+        params.append(institution_filter)
+    if date_from:
+        extra_where += " AND t.trade_date >= ?"
+        params.append(date_from)
+    if date_to:
+        extra_where += " AND t.trade_date <= ?"
+        params.append(date_to)
     query = f"""
         SELECT t.account_id, a.institution_id, a.display_code,
                {', '.join(f'{c} AS {l}' for c, l in zip(group_cols, group_labels))},
@@ -342,11 +356,12 @@ def _grouped_cash_report(conn, txn_type, owner, group_cols, group_labels=None):
         FROM txn t JOIN account a ON a.account_id = t.account_id
         WHERE t.txn_type = '{txn_type}'
         {_leg_preferred_query(txn_type)}
+        {extra_where}
         GROUP BY t.account_id, {', '.join(group_cols)}, t.currency
         ORDER BY a.institution_id, a.account_id
     """
     rows, total_sgd, unknown = [], 0.0, set()
-    for r in conn.execute(query).fetchall():
+    for r in conn.execute(query, params).fetchall():
         weight = 1.0
         if owner:
             w = ownership_weight(ownership, r["account_id"], owner)
@@ -465,6 +480,83 @@ def get_ownership_coverage(conn):
     ownership = load_ownership()
     all_accounts = [r[0] for r in conn.execute("SELECT account_id FROM account ORDER BY account_id")]
     return [a for a in all_accounts if a not in ownership]
+
+
+def _prior_month_key(as_of_date):
+    """'2026-09-18' -> '2026-08' (the calendar month immediately before)."""
+    y, m = int(as_of_date[:4]), int(as_of_date[5:7])
+    if m == 1:
+        return f"{y - 1}-12"
+    return f"{y}-{m - 1:02d}"
+
+
+def get_prior_month_values(conn, owner=None):
+    """Returns {account_id: value_sgd_or_None}. value_sgd is None when that
+    account's prior calendar month hasn't been loaded at all (shown as "-"
+    by the caller, not silently treated as zero).
+
+    UBS: from account_valuation_history (its own month-end TWR data,
+    separate from the position snapshot - see the Overview design notes).
+    Every other institution: from position_snapshot, since each monthly
+    statement IS the position snapshot for that institution.
+
+    Uses the latest available FX rate for conversion, same as every other
+    SGD figure in this app - NOT the rate that was actually in effect
+    during that prior month. Only UBS's position-snapshot loader ever
+    captures a dated FX rate at all, and since that's a single "current
+    state" file typically reloaded repeatedly rather than an accumulating
+    monthly archive, a true historical rate usually isn't available
+    anyway - this is a deliberate, acknowledged simplification, not an
+    oversight. A currency-heavy account's apparent month-over-month change
+    can therefore be partly FX movement, not purely portfolio movement."""
+    ownership = load_ownership()
+    accounts = conn.execute(
+        """SELECT account_id, institution_id, base_currency FROM account ORDER BY account_id"""
+    ).fetchall()
+
+    out = {}
+    for a in accounts:
+        latest = conn.execute(
+            "SELECT max(as_of_date) FROM position_snapshot WHERE account_id=?",
+            (a["account_id"],),
+        ).fetchone()[0]
+        if not latest:
+            out[a["account_id"]] = None
+            continue
+        prior_key = _prior_month_key(latest)
+
+        if a["institution_id"] == "UBS":
+            row = conn.execute(
+                """SELECT final_value FROM account_valuation_history
+                   WHERE account_id=? AND period_type='month_end' AND period_end LIKE ?
+                   ORDER BY period_end DESC LIMIT 1""",
+                (a["account_id"], f"{prior_key}%"),
+            ).fetchone()
+            native_value = row["final_value"] if row else None
+        else:
+            row = conn.execute(
+                """SELECT sum(market_value_base) mv FROM position_snapshot
+                   WHERE account_id=? AND as_of_date LIKE ?""",
+                (a["account_id"], f"{prior_key}%"),
+            ).fetchone()
+            native_value = row["mv"] if row and row["mv"] is not None else None
+
+        if native_value is None:
+            out[a["account_id"]] = None
+            continue
+
+        weight = 1.0
+        if owner:
+            w = ownership_weight(ownership, a["account_id"], owner)
+            if w is None:
+                out[a["account_id"]] = None
+                continue
+            weight = w
+
+        rate = get_fx_rate(conn, a["base_currency"])
+        out[a["account_id"]] = (native_value * rate * weight) if rate else None
+
+    return out
 
 
 def yearly_rollup(rows, amount_key="amount_sgd", date_key=None, year_key=None):

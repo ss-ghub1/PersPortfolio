@@ -9,6 +9,27 @@
     </div>
   {% endif %}
 
+  <div class="filter-bar">
+    <span>Institution:</span>
+    <a href="?{% if owner %}owner={{ owner }}{% endif %}"
+       class="{{ 'active' if not current_institution else '' }}">All</a>
+    {% for inst in institutions %}
+      <a href="?institution={{ inst }}{% if owner %}&owner={{ owner }}{% endif %}"
+         class="{{ 'active' if current_institution == inst else '' }}">{{ inst }}</a>
+    {% endfor %}
+  </div>
+
+  <form method="get" class="filter-bar">
+    {% if current_institution %}<input type="hidden" name="institution" value="{{ current_institution }}">{% endif %}
+    {% if owner %}<input type="hidden" name="owner" value="{{ owner }}">{% endif %}
+    <span>Date range:</span>
+    <input type="date" name="date_from" value="{{ date_from }}">
+    <span>to</span>
+    <input type="date" name="date_to" value="{{ date_to }}">
+    <button type="submit">Apply</button>
+    {% if date_from or date_to %}<a href="?{% if current_institution %}institution={{ current_institution }}&{% endif %}{% if owner %}owner={{ owner }}{% endif %}">Clear dates</a>{% endif %}
+  </form>
+
   <section>
     <h2>Total fees: {{ "{:,.2f}".format(data.total_sgd) }} SGD</h2>
   </section>

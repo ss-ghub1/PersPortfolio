@@ -80,6 +80,7 @@ tfoot td { font-weight: bold; border-top: 2px solid #999; }
 .filter-bar button:hover { background: #2d4a7a; }
 .nowrap { white-space: nowrap; }
 .hint { font-size: 0.5em; color: #888; font-weight: normal; }
+.hint-note { font-size: 0.85em; color: #888; font-style: italic; margin: -8px 0 10px 0; }
 .table-compact th, .table-compact td { font-size: 0.75em; padding: 4px 8px; }
 .group-row td { border-top: 1px solid #ccc; }
 .sub-row td { color: #666; font-size: 0.95em; }
