@@ -269,6 +269,7 @@ def load_transactions(path: Path, conn: sqlite3.Connection = None, force: bool =
 
     wb = openpyxl.load_workbook(path, data_only=True)
     source_file = Path(path).name
+    n_unmatched_sheets = 0
 
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
@@ -300,8 +301,23 @@ def load_transactions(path: Path, conn: sqlite3.Connection = None, force: bool =
                 n_loaded += _insert_txn(conn, account_id, rec)
 
         else:
+            n_unmatched_sheets += 1
             print(f"[transactions] WARNING: sheet '{sheet_name}' did not match a known "
                   f"tab format (A1='{header_a1}') - skipped.")
+
+    if n_unmatched_sheets == len(wb.sheetnames):
+        # EVERY sheet in the file was unrecognized - this is the signature
+        # of the wrong file entirely (e.g. the position snapshot passed as
+        # --transactions by mistake), not a benign extra tab. That incident
+        # is exactly why this check exists: it completed "successfully"
+        # with 0 rows loaded and only warnings printed, easy to miss in a
+        # long command's output. A partial match (some sheets recognized,
+        # some not) stays lenient - only a TOTAL miss is a hard error.
+        raise ValueError(
+            f"'{source_file}' - none of its {len(wb.sheetnames)} sheet(s) matched any known "
+            f"tab format. This usually means the wrong file was passed (e.g. a position "
+            f"snapshot given as --transactions). Not loading - check the file and retry."
+        )
 
     conn.commit()
     print(f"[transactions] loaded {n_loaded} rows, skipped {n_skipped_no_account} "
