@@ -35,7 +35,7 @@ nav a.active { background: white; color: #1f3864; font-weight: bold; }
   font-size: 0.9em;
 }
 .owner-toggle a.active { background: #ffb000; color: #1a1a1a; border-color: #ffb000; font-weight: bold; }
-main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+main { padding: 24px; max-width: 1600px; margin: 0 auto; }
 h1 { margin-top: 0; }
 .owner-badge {
   font-size: 0.5em;
@@ -49,6 +49,7 @@ h1 { margin-top: 0; }
 section { margin-bottom: 32px; }
 h2 { font-size: 1.3em; }
 h3 { color: #444; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; }
+section { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; background: white; }
 th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.85em; vertical-align: top; }
 th { background: #f0f2f5; text-transform: uppercase; color: #666; font-size: 0.8em; }
@@ -79,6 +80,11 @@ tfoot td { font-weight: bold; border-top: 2px solid #999; }
 .filter-bar button:hover { background: #2d4a7a; }
 .nowrap { white-space: nowrap; }
 .hint { font-size: 0.5em; color: #888; font-weight: normal; }
+.table-compact th, .table-compact td { font-size: 0.75em; padding: 4px 8px; }
+.group-row td { border-top: 1px solid #ccc; }
+.sub-row td { color: #666; font-size: 0.95em; }
+.sub-row .sub-label { padding-left: 24px; }
+.hint-pct { color: #999; font-size: 0.9em; }
 .row-review { background: #fff0f0; }
 .row-gap { background: #f5f5f5; color: #777; }
 .all-clear { color: #2a7a2a; font-weight: bold; }

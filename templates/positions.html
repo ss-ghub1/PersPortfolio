@@ -27,7 +27,7 @@
     <table>
       <thead>
         <tr>
-          <th>Account</th><th>Institution</th><th>Instrument</th><th>Asset Class</th>
+          <th>Account</th><th>Instrument</th><th>Asset Class</th>
           <th>Funding</th><th class="num">Quantity</th><th class="num">On Loan</th>
           <th class="num">Value (Native)</th><th class="num">Value (SGD)</th><th>As of</th>
         </tr>
@@ -36,7 +36,6 @@
         {% for p in data.rows %}
         <tr>
           <td>{{ p.display_code }}</td>
-          <td>{{ p.institution_id }}</td>
           <td>{{ p.instrument_name }}</td>
           <td>{{ p.asset_class or "-" }}</td>
           <td>{{ p.funding_source or "-" }}</td>
@@ -50,7 +49,7 @@
       </tbody>
       <tfoot>
         <tr>
-          <td colspan="8">TOTAL</td>
+          <td colspan="7">TOTAL</td>
           <td class="num">{{ "{:,.0f}".format(data.total_sgd) }}</td>
           <td></td>
         </tr>

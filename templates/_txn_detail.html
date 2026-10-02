@@ -1,9 +1,9 @@
 <section>
   <h3>Detail ({{ detail.rows | length }} transactions)</h3>
-  <table>
+  <table class="table-compact">
     <thead>
       <tr>
-        <th>Date</th><th>Account</th><th>Institution</th><th>Subtype</th>
+        <th>Date</th><th>Account</th><th>Subtype</th>
         <th>Description</th><th class="num">Qty</th><th class="num">Price</th>
         <th class="num">Amount (Native)</th><th class="num">Amount (SGD)</th>
       </tr>
@@ -13,7 +13,6 @@
       <tr>
         <td class="nowrap">{{ t.trade_date }}</td>
         <td>{{ t.display_code }}</td>
-        <td>{{ t.institution_id }}</td>
         <td>{{ t.txn_subtype or "-" }}</td>
         <td>{{ t.description or t.instrument_name or "-" }}</td>
         <td class="num">{{ "{:,.2f}".format(t.quantity) if t.quantity is not none else "-" }}</td>

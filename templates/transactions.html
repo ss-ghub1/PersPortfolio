@@ -48,10 +48,10 @@
   {% include "_yearly_totals.html" %}
 
   <section>
-    <table>
+    <table class="table-compact">
       <thead>
         <tr>
-          <th>Date</th><th>Account</th><th>Institution</th><th>Leg</th>
+          <th>Date</th><th>Account</th><th>Leg</th>
           <th>Type</th><th>Subtype</th><th>Instrument</th><th>Description</th>
           <th class="num">Qty</th><th class="num">Price</th>
           <th class="num">Amount (Native)</th><th class="num">Amount (SGD)</th>
@@ -62,7 +62,6 @@
         <tr>
           <td class="nowrap">{{ t.trade_date }}</td>
           <td>{{ t.display_code }}</td>
-          <td>{{ t.institution_id }}</td>
           <td>{{ t.source_leg }}</td>
           <td>{{ t.txn_type }}</td>
           <td>{{ t.txn_subtype or "-" }}</td>

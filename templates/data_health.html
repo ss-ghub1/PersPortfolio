@@ -8,7 +8,7 @@
       <table>
         <thead>
           <tr>
-            <th>Account</th><th>Institution</th><th>Check</th><th>Status</th>
+            <th>Account</th><th>Check</th><th>Status</th>
             <th class="num">Expected</th><th class="num">Actual</th><th class="num">Diff</th>
             <th>As of</th><th>Note</th>
           </tr>
@@ -17,7 +17,6 @@
           {% for r in reconciliation.mismatches %}
           <tr class="{{ 'row-review' if r.label == 'MISMATCH / Review' else 'row-gap' }}">
             <td>{{ r.display_code }}</td>
-            <td>{{ r.institution_id }}</td>
             <td>{{ r.scope }}</td>
             <td><strong>{{ r.label }}</strong></td>
             <td class="num">{{ "{:,.2f}".format(r.expected_value) if r.expected_value is not none else "-" }}</td>
@@ -39,7 +38,7 @@
     <table>
       <thead>
         <tr>
-          <th>Account</th><th>Institution</th><th>Check</th><th>Status</th>
+          <th>Account</th><th>Check</th><th>Status</th>
           <th class="num">Expected</th><th class="num">Actual</th><th class="num">Diff</th>
           <th>As of</th><th>Note</th>
         </tr>
@@ -48,7 +47,6 @@
         {% for r in reconciliation.matched %}
         <tr>
           <td>{{ r.display_code }}</td>
-          <td>{{ r.institution_id }}</td>
           <td>{{ r.scope }}</td>
           <td>{{ r.label }}</td>
           <td class="num">{{ "{:,.2f}".format(r.expected_value) if r.expected_value is not none else "-" }}</td>
@@ -68,7 +66,7 @@
       <table>
         <thead>
           <tr>
-            <th>Account</th><th>Institution</th><th>Date</th><th class="num">Amount</th>
+            <th>Account</th><th>Date</th><th class="num">Amount</th>
             <th>Description</th><th>Source file</th>
           </tr>
         </thead>
@@ -76,7 +74,6 @@
           {% for t in review_queue %}
           <tr>
             <td>{{ t.display_code }}</td>
-            <td>{{ t.institution_id }}</td>
             <td class="nowrap">{{ t.trade_date }}</td>
             <td class="num">{{ "{:,.2f}".format(t.gross_amount) if t.gross_amount is not none else "-" }} {{ t.currency }}</td>
             <td>{{ t.raw_description or t.raw_txn_type_label or "-" }}</td>
@@ -94,13 +91,12 @@
     <h3>Data freshness, by account</h3>
     <table>
       <thead>
-        <tr><th>Account</th><th>Institution</th><th>Last position date</th><th>Last loaded</th></tr>
+        <tr><th>Account</th><th>Last position date</th><th>Last loaded</th></tr>
       </thead>
       <tbody>
         {% for f in freshness %}
         <tr>
           <td>{{ f.display_code }}</td>
-          <td>{{ f.institution_id }}</td>
           <td class="nowrap">{{ f.last_position_date or "-" }}</td>
           <td class="nowrap">{{ f.last_loaded_at or "-" }}</td>
         </tr>
