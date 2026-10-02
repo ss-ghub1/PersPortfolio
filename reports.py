@@ -579,6 +579,74 @@ def yearly_rollup(rows, amount_key="amount_sgd", date_key=None, year_key=None):
     return [{"year": y, **v} for y, v in sorted(totals.items())]
 
 
+def get_performance(conn, owner=None):
+    """Returns {"rows": [...], "unknown_ownership_accounts": [...]}. One
+    row per account that has ANY statement-based TWR data (currently UBS,
+    Endowus, IBKR - each institution's own authoritative figure, ported
+    from performance.py's statement_performance(), not recomputed). CDP
+    and DBS show as unavailable - no TWR concept exists for them (CDP:
+    deferred, cost-vs-market only, see README; DBS: not applicable, pure
+    custody/bank data).
+
+    Unlike dollar-value pages, TWR% itself is NOT scaled by ownership -
+    a return percentage is the same regardless of ownership share. The
+    owner filter only determines which ACCOUNTS show (same unknown-
+    ownership exclusion as every other page), not the number shown."""
+    ownership = load_ownership()
+    accounts = conn.execute(
+        """SELECT account_id, institution_id, display_code FROM account
+           ORDER BY institution_id, account_id"""
+    ).fetchall()
+
+    rows, unknown = [], set()
+    for a in accounts:
+        if owner:
+            w = ownership_weight(ownership, a["account_id"], owner)
+            if w is None:
+                unknown.add(a["account_id"])
+                continue
+            if w == 0:
+                continue  # this owner holds none of this account - skip, not "unavailable"
+
+        annual = conn.execute(
+            """SELECT period_label, period_end, final_value, currency, inflows, outflows, twr_pct
+               FROM account_valuation_history
+               WHERE account_id=? AND period_type='year_end' ORDER BY period_end""",
+            (a["account_id"],),
+        ).fetchall()
+        monthly_latest = conn.execute(
+            """SELECT period_label, period_end, final_value, currency, twr_pct
+               FROM account_valuation_history
+               WHERE account_id=? AND period_type='month_end' ORDER BY period_end DESC LIMIT 1""",
+            (a["account_id"],),
+        ).fetchone()
+        since_inception = conn.execute(
+            """SELECT period_end, twr_pct FROM account_valuation_history
+               WHERE account_id=? AND period_type='cumulative_annual'
+               ORDER BY period_end DESC LIMIT 1""",
+            (a["account_id"],),
+        ).fetchone()
+
+        if not annual and not monthly_latest:
+            rows.append({
+                "account_id": a["account_id"], "institution_id": a["institution_id"],
+                "display_code": a["display_code"] or a["account_id"], "available": False,
+            })
+            continue
+
+        latest = monthly_latest or annual[-1]
+        rows.append({
+            "account_id": a["account_id"], "institution_id": a["institution_id"],
+            "display_code": a["display_code"] or a["account_id"], "available": True,
+            "currency": latest["currency"],
+            "since_inception_twr_pct": since_inception["twr_pct"] if since_inception else None,
+            "since_inception_as_of": since_inception["period_end"] if since_inception else None,
+            "latest_period_label": latest["period_label"], "latest_twr_pct": latest["twr_pct"],
+            "annual": [dict(r) for r in annual],
+        })
+    return {"rows": rows, "unknown_ownership_accounts": sorted(unknown)}
+
+
 def list_institutions(conn):
     return [r[0] for r in conn.execute("SELECT DISTINCT institution_id FROM account ORDER BY institution_id")]
 

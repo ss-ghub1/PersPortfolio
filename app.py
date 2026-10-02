@@ -161,6 +161,15 @@ def income():
                             date_from=date_from or "", date_to=date_to or "")
 
 
+@app.route("/performance")
+def performance():
+    owner = _owner_from_request()
+    conn = get_connection()
+    data = reports.get_performance(conn, owner)
+    conn.close()
+    return render_template("performance.html", active_page="performance", owner=owner, data=data)
+
+
 @app.route("/data_health")
 def data_health():
     conn = get_connection()
@@ -177,7 +186,7 @@ def data_health():
 
 
 STUB_PAGES = [p for p in NAV_PAGES[1:]
-              if p[0] not in ("positions", "transactions", "fees", "income", "data_health")]
+              if p[0] not in ("positions", "transactions", "fees", "income", "data_health", "performance")]
 for slug, label in STUB_PAGES:
     def _make_stub(slug=slug, label=label):
         def _stub():

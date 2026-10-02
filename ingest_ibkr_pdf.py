@@ -381,6 +381,25 @@ def _load_one_ibkr_account(conn, native_code, data, source_file, period):
          round(computed_ending - stated_ending, 2), f"NAV walk reconciles (source: {source_file})"),
     )
 
+    # Persist IBKR's own TWR%, same pattern Endowus already uses - this was
+    # previously parsed and printed once, then discarded, so the Performance
+    # page had nothing to show for IBKR despite the figure already existing
+    # in every statement. IBKR's NAV walk values are already in SGD (the
+    # account's base currency, confirmed by matching our own independently-
+    # computed SGD totals), so no FX conversion is needed here.
+    inflows = sum(d["amount"] for d in data["deposits_withdrawals"] if d["amount"] > 0)
+    outflows = sum(d["amount"] for d in data["deposits_withdrawals"] if d["amount"] < 0)
+    gain_value = (nav.get("Mark-to-Market", 0) + nav.get("Interest", 0)
+                  + nav.get("Change in Interest Accruals", 0) + nav.get("Other FX Translations", 0))
+    conn.execute(
+        """INSERT OR IGNORE INTO account_valuation_history
+             (account_id, period_type, period_end, period_label, currency,
+              final_value, inflows, outflows, gain_value, twr_pct, source_file)
+           VALUES (?, 'month_end', ?, ?, 'SGD', ?, ?, ?, ?, ?, ?)""",
+        (account_id, period.get("end"), f"{period.get('start')} to {period.get('end')}",
+         stated_ending, inflows, outflows, gain_value, nav.get("twr_pct"), source_file),
+    )
+
     as_of_date = period.get("end")
     n_positions = 0
     conn.execute(

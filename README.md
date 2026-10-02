@@ -341,8 +341,8 @@ templates around them. When Phase 2 adds an interactive JS layer, it can
 call the same functions and `jsonify()` the result instead, with no
 duplicated query logic.
 
-**Built so far:** Overview, Positions, Transactions, Fees, Income, and
-Data Health are all built. Only Performance remains a placeholder.
+**Built so far:** all 6 nav pages (Overview, Positions, Transactions, Fees,
+Income, Data Health, Performance) are done.
 
 **Overview's "Prior Month (SGD)" column**: the calendar month immediately
 before each account's own current period (UBS from
@@ -508,8 +508,13 @@ exists yet.
    detect Endowus by "OCR found no text layer" - that shortcut breaks the
    moment a second scanned-PDF institution exists. Use explicit branding-
    text matching for every institution, including Endowus, from the start.
-2. **Web app: Performance page** (Overview, Positions, Transactions, Fees,
-   Income, and Data Health are all done now).
+2. CDP (and possibly DBS's CPFIS-OA equity holdings - same situation)
+   performance: a simple cost-vs-current-market-value comparison, NOT a
+   true TWR, since CDP doesn't provide purchase dates (only cost price).
+   Needs cost price captured as a one-off or via a small JSON config,
+   maintained separately from the regular monthly loads. Deliberately
+   scoped out of the Performance page build (UBS/Endowus/IBKR) to keep
+   that focused - add once scoped properly.
 3. Modified Dietz return calc (`load_endowus_statement()`) still assumes
    the Joint account's cash-deduction fee mechanism - not yet updated for
    CPF/SRS goals' different (unit-sale) fee mechanism.
