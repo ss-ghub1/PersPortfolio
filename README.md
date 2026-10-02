@@ -556,3 +556,24 @@ exists yet.
       rewrite.
     - Upgrading `db.py` to SQLAlchemy for a Postgres option - schema is
       already portable SQL, low-cost whenever it's wanted.
+    - **Parse UBS positions/transactions from the statement PDF instead of
+      the Excel exports.** Confirmed (not assumed) the PDF actually has
+      this data: a "Detailed positions" section (6 pages per portfolio -
+      instrument, ISIN, quantity, cost price, market price, market value,
+      asset category) and a "Transaction list" section (3 pages - trade
+      date, settlement date, ISIN, quantity, cost/transaction price,
+      transaction value), both richer than initially assumed. This would
+      give true month-end alignment (the Excel snapshot's "whenever you
+      happened to export it" misalignment, which is what prompted this
+      investigation in the first place - see the Overview section's Prior
+      Month column) with no separate export step, since the PDF is
+      already being downloaded anyway. Real tradeoff: comparable in scope
+      to building a new institution from scratch, not a quick addition -
+      each holding spans 2-3 physical lines with interleaved metadata
+      (ISIN, YTD performance, accrued interest, exchange rates all woven
+      together), across 6+3 pages, times 4 portfolios, and the existing
+      Excel-based pipeline is already working and thoroughly reconciled -
+      replacing it carries real regression risk against something that
+      isn't actually broken today. Scope out properly (check all 4
+      portfolios' layouts for consistency, estimate real effort) before
+      committing to this, rather than starting directly.
