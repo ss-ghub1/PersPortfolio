@@ -74,6 +74,15 @@ def _parse_nav_walk(text):
         m = re.search(rf"{re.escape(f)}\s+({NUM})", text)
         if m:
             out[f] = _f(m.group(1))
+    # "Interest" is a genuinely separate, necessary term in the NAV walk
+    # identity - confirmed by hand (the walk doesn't close without it,
+    # found on a real August statement where it appeared for the first
+    # time). It's NOT the same as "Change in Interest Accruals" (handled
+    # above) or the "Interest Accruals" breakdown row in the NAV table -
+    # the negative lookahead excludes both of those explicitly.
+    m = re.search(rf"Interest(?!\s+Accruals)\s+({NUM})", text)
+    if m:
+        out["Interest"] = _f(m.group(1))
     m = re.search(rf"Interest Accruals\s+{NUM}\s+{NUM}\s+{NUM}\s+({NUM})\s+{NUM}", text)
     if m:
         out["interest_accruals_ending"] = _f(m.group(1))
@@ -109,7 +118,15 @@ def _parse_open_positions(text):
 
 def _parse_forex_balances(text):
     rows = []
-    m = re.search(r"Forex Balances\n(.*?)\n(?:Net Stock Position Summary|Trades\n)", text, re.S)
+    # Bound on the table's OWN closing "Total" line, not on whatever
+    # section happens to follow - the previous approach (guessing "Net
+    # Stock Position Summary" or "Trades\n" would always come next) broke
+    # on a real statement where an account had neither section that month
+    # (no trades at all), so the whole match silently failed and returned
+    # nothing. The Forex Balances table always has its own "Total ..."
+    # closing row regardless of what comes after it, confirmed against
+    # both the July and August statements.
+    m = re.search(r"Forex Balances\n(.*?)\nTotal\s", text, re.S)
     if not m:
         return rows
     block = m.group(1)
@@ -319,13 +336,26 @@ def _load_one_ibkr_account(conn, native_code, data, source_file, period):
 
     # --- Reconciliation gate: the NAV walk must sum to the stated ending
     # value. This is IBKR's own accounting identity, not ours - refuse to
-    # load if it doesn't hold. ---
-    walk_fields = ["Starting Value", "Mark-to-Market", "Deposits & Withdrawals", "Position Transfers",
-                   "Change in Interest Accruals", "Commissions", "Sales Tax", "Other FX Translations"]
-    if not all(f in nav for f in walk_fields) or "Ending Value" not in nav:
-        print(f"[ibkr] ABORT {native_code}: NAV walk incomplete - {nav}")
+    # load if it doesn't hold.
+    #
+    # IBKR omits a line entirely when it's zero for the period, rather than
+    # printing "0.00" - confirmed on a real statement where Deposits &
+    # Withdrawals, Position Transfers, Commissions, and Sales Tax were all
+    # absent in a quiet month with no corresponding activity. So a missing
+    # OPTIONAL component defaults to 0 rather than aborting - only
+    # "Starting Value" and "Ending Value" are true anchors the identity
+    # can't do without, so those two stay required.
+    #
+    # "Interest" (distinct from "Change in Interest Accruals") is also
+    # included here - found on the same statement, confirmed by hand that
+    # the walk doesn't close without it. ---
+    walk_fields = ["Mark-to-Market", "Deposits & Withdrawals", "Position Transfers",
+                   "Change in Interest Accruals", "Commissions", "Sales Tax",
+                   "Other FX Translations", "Interest"]
+    if "Starting Value" not in nav or "Ending Value" not in nav:
+        print(f"[ibkr] ABORT {native_code}: NAV walk missing Starting or Ending Value - {nav}")
         return None
-    computed_ending = round(sum(nav[f] for f in walk_fields), 2)
+    computed_ending = round(nav["Starting Value"] + sum(nav.get(f, 0.0) for f in walk_fields), 2)
     stated_ending = round(nav["Ending Value"], 2)
     if abs(computed_ending - stated_ending) > 0.02:
         print(f"[ibkr] ABORT {native_code}: NAV walk does not reconcile "
