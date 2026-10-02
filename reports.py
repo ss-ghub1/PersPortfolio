@@ -95,8 +95,33 @@ def get_account_values(conn, owner=None):
     return {"rows": rows, "total_sgd": total_sgd, "unknown_ownership_accounts": unknown}
 
 
+# Every institution labels asset classes differently (UBS: "Equities -
+# Equity investments", CDP: "Equities", Endowus: "Equity Fund"). Maps each
+# raw label actually seen in the data to a parent category. A label NOT in
+# this dict falls into "Other" with its own sub-label preserved, rather
+# than silently disappearing - same never-drop-data principle used
+# throughout this project. If a new institution introduces an asset_class
+# label not listed here, it shows up under "Other" (visible, not hidden)
+# until this mapping is extended to cover it explicitly.
+ASSET_CLASS_PARENT = {
+    "Equities": "Equities", "Equities - Equity investments": "Equities", "Equity Fund": "Equities",
+    "Bonds": "Bonds & Fixed Income", "Bonds - Bond investments": "Bonds & Fixed Income",
+    "Fixed Income": "Bonds & Fixed Income",
+    "Cash": "Cash & Money Market", "Liquidity - Money market investments": "Cash & Money Market",
+    "Multi Asset": "Multi Asset",
+    "Real estate - Real estate investments": "Real Estate",
+    "Hedge funds & private markets - Hedge funds": "Hedge Funds & Private Markets",
+    "Hedge funds & private markets - Private markets": "Hedge Funds & Private Markets",
+    "Insurance/Fixed Deposits": "Insurance & Fixed Deposits",
+    "Others - Asset allocation funds": "Other",
+}
+
+
 def get_asset_allocation(conn, owner=None):
-    """Same owner-weighting logic as get_account_values, aggregated by asset class."""
+    """Returns {"groups": [{parent, value_sgd, pct, subs: [{label, value_sgd,
+    pct_of_parent}, ...]}, ...], "total_sgd": float, "unknown_ownership_accounts": [...]}.
+    Same owner-weighting logic as get_account_values, grouped into parent
+    categories (see ASSET_CLASS_PARENT) with sub-labels shown within each."""
     ownership = load_ownership()
     rows = conn.execute(
         """SELECT p.account_id, a.base_currency, COALESCE(i.asset_class, 'Cash') AS asset_class,
@@ -109,7 +134,7 @@ def get_asset_allocation(conn, owner=None):
            GROUP BY p.account_id, a.base_currency, asset_class"""
     ).fetchall()
 
-    totals, unknown = {}, set()
+    sub_totals, unknown = {}, set()
     for r in rows:
         weight = 1.0
         if owner:
@@ -122,12 +147,31 @@ def get_asset_allocation(conn, owner=None):
         if rate is None:
             continue
         val_sgd = (r["mv"] or 0) * rate * weight
-        totals[r["asset_class"]] = totals.get(r["asset_class"], 0.0) + val_sgd
+        raw_label = r["asset_class"]
+        parent = ASSET_CLASS_PARENT.get(raw_label, "Other")
+        key = (parent, raw_label)
+        sub_totals[key] = sub_totals.get(key, 0.0) + val_sgd
 
-    grand_total = sum(totals.values())
-    out = [{"asset_class": k, "value_sgd": v, "pct": (v / grand_total * 100) if grand_total else 0}
-           for k, v in sorted(totals.items(), key=lambda x: -x[1])]
-    return {"rows": out, "total_sgd": grand_total, "unknown_ownership_accounts": sorted(unknown)}
+    grand_total = sum(sub_totals.values())
+
+    by_parent = {}
+    for (parent, raw_label), val in sub_totals.items():
+        by_parent.setdefault(parent, []).append({"label": raw_label, "value_sgd": val})
+
+    groups = []
+    for parent, subs in by_parent.items():
+        parent_total = sum(s["value_sgd"] for s in subs)
+        for s in subs:
+            s["pct_of_parent"] = (s["value_sgd"] / parent_total * 100) if parent_total else 0
+        subs.sort(key=lambda s: -s["value_sgd"])
+        groups.append({
+            "parent": parent, "value_sgd": parent_total,
+            "pct": (parent_total / grand_total * 100) if grand_total else 0,
+            "subs": subs,
+        })
+    groups.sort(key=lambda g: -g["value_sgd"])
+
+    return {"groups": groups, "total_sgd": grand_total, "unknown_ownership_accounts": sorted(unknown)}
 
 
 def get_positions(conn, owner=None, institution_filter=None, account_filter=None):
@@ -421,6 +465,26 @@ def get_ownership_coverage(conn):
     ownership = load_ownership()
     all_accounts = [r[0] for r in conn.execute("SELECT account_id FROM account ORDER BY account_id")]
     return [a for a in all_accounts if a not in ownership]
+
+
+def yearly_rollup(rows, amount_key="amount_sgd", date_key=None, year_key=None):
+    """Re-aggregates already-fetched rows by year - deliberately NOT a new
+    query. Reusing the exact rows a page already fetched (from
+    get_transactions/get_fees/get_income) guarantees the yearly total can
+    never disagree with the detail table below it, since both come from
+    the same data, not a second query that could drift out of sync.
+    Pass either date_key (raw transaction rows, year extracted from the
+    date string) or year_key (already-grouped fees/income rows)."""
+    from collections import defaultdict
+    totals = defaultdict(lambda: {"amount_sgd": 0.0, "n": 0})
+    for r in rows:
+        if year_key:
+            year = r.get(year_key) or "Unknown"
+        else:
+            year = (r[date_key][:4] if r.get(date_key) else "Unknown")
+        totals[year]["amount_sgd"] += r[amount_key] or 0
+        totals[year]["n"] += 1
+    return [{"year": y, **v} for y, v in sorted(totals.items())]
 
 
 def list_institutions(conn):

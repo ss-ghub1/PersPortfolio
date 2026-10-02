@@ -521,19 +521,7 @@ you hit them. Ordered by how much they could actually bite you.
    (currently alphabetical by internal ID, which doesn't order UBS 1-4
    correctly); Endowus Joint's display label shouldn't show the email
    address.
-9. Asset class labels differ by institution (UBS: "Equities - Equity
-   investments", CDP: "Equities", Endowus: "Equity Fund") - not normalized
-   into one taxonomy; shows as separate rows in asset allocation today.
-   Concrete design agreed for the fix: group into parent categories
-   (Equities, Bonds/Fixed Income, etc.) on the Overview page, with each
-   parent's sub-labels shown underneath it and a total % column for the
-   parent group as a whole - not just a flat relabeling, an actual
-   hierarchy.
-10. Transactions/Fees/Income pages: add an explicit yearly total/subtotal
-   view. Fees and Income already group by year as one dimension but don't
-   surface a clean "total for 2026" roll-up on its own; Transactions has
-   no year breakdown at all currently.
-11. CDP's December statements include an annual tax-summary section ("Other
+9. CDP's December statements include an annual tax-summary section ("Other
    Dividends / Coupon / Capital Repayment / Redemption / Cash Distributions
    for the Period 1 Jan-31 Dec") covering the full calendar year, not just
    December. Never parse this as a transaction source (every event in it
@@ -543,14 +531,14 @@ you hit them. Ordered by how much they could actually bite you.
    and compare against this section's stated total as a pure validation
    check (never writes a transaction, so it can't double-count anything).
    Not useful until enough months exist to check against.
-12. `performance.py`: the Endowus period return is computed and stored but
+10. `performance.py`: the Endowus period return is computed and stored but
     not yet printed in the CLI report; the report header text still says
     "UBS's own statement TWR" for every account regardless of institution.
-13. Positions page: "On Loan" is its own column but only ever populated for
+11. Positions page: "On Loan" is its own column but only ever populated for
     CDP holdings - wasted space for every other institution's rows.
     Consider showing it as a second, indented sub-row under the position
     instead (e.g. "  -> 2,000 on loan"), freeing up that column entirely.
-14. **Deferred, larger decisions** (do once the basic web app design is
+12. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,

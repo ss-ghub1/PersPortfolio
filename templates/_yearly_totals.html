@@ -1,0 +1,17 @@
+<section>
+  <h3>By year</h3>
+  <table>
+    <thead>
+      <tr><th>Year</th><th class="num"># Txns</th><th class="num">Total (SGD)</th></tr>
+    </thead>
+    <tbody>
+      {% for y in yearly %}
+      <tr>
+        <td>{{ y.year }}</td>
+        <td class="num">{{ y.n }}</td>
+        <td class="num">{{ "{:,.2f}".format(y.amount_sgd) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>

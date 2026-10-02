@@ -108,10 +108,11 @@ def transactions():
         txn_type = None
     data = reports.get_transactions(conn, owner, institution_filter=institution,
                                      txn_type_filter=txn_type, date_from=date_from, date_to=date_to)
+    yearly = reports.yearly_rollup(data["rows"], date_key="trade_date")
     conn.close()
     return render_template(
         "transactions.html", active_page="transactions", owner=owner,
-        data=data, institutions=institutions, current_institution=institution,
+        data=data, yearly=yearly, institutions=institutions, current_institution=institution,
         txn_types=txn_types, current_txn_type=txn_type,
         date_from=date_from or "", date_to=date_to or "",
     )
@@ -123,8 +124,10 @@ def fees():
     conn = get_connection()
     data = reports.get_fees(conn, owner)
     detail = reports.get_transactions(conn, owner, txn_type_filter="FEE")
+    yearly = reports.yearly_rollup(data["rows"], year_key="year")
     conn.close()
-    return render_template("fees.html", active_page="fees", owner=owner, data=data, detail=detail)
+    return render_template("fees.html", active_page="fees", owner=owner,
+                            data=data, detail=detail, yearly=yearly)
 
 
 @app.route("/income")
@@ -133,8 +136,10 @@ def income():
     conn = get_connection()
     data = reports.get_income(conn, owner)
     detail = reports.get_transactions(conn, owner, txn_type_filter="INCOME")
+    yearly = reports.yearly_rollup(data["rows"], year_key="year")
     conn.close()
-    return render_template("income.html", active_page="income", owner=owner, data=data, detail=detail)
+    return render_template("income.html", active_page="income", owner=owner,
+                            data=data, detail=detail, yearly=yearly)
 
 
 @app.route("/data_health")

@@ -51,14 +51,23 @@
   <section>
     <h3>Asset allocation</h3>
     <table>
-      <thead><tr><th>Asset class</th><th class="num">Value (SGD)</th><th class="num">%</th></tr></thead>
+      <thead><tr><th>Asset class</th><th class="num">Value (SGD)</th><th class="num">% of total</th></tr></thead>
       <tbody>
-        {% for r in allocation.rows %}
-        <tr>
-          <td>{{ r.asset_class }}</td>
-          <td class="num">{{ "{:,.0f}".format(r.value_sgd) }}</td>
-          <td class="num">{{ "%.1f"|format(r.pct) }}%</td>
+        {% for g in allocation.groups %}
+        <tr class="group-row">
+          <td><strong>{{ g.parent }}</strong></td>
+          <td class="num"><strong>{{ "{:,.0f}".format(g.value_sgd) }}</strong></td>
+          <td class="num"><strong>{{ "%.1f"|format(g.pct) }}%</strong></td>
         </tr>
+        {% if g.subs | length > 1 %}
+          {% for s in g.subs %}
+          <tr class="sub-row">
+            <td class="sub-label">{{ s.label }}</td>
+            <td class="num">{{ "{:,.0f}".format(s.value_sgd) }}</td>
+            <td class="num hint-pct">{{ "%.0f"|format(s.pct_of_parent) }}% of group</td>
+          </tr>
+          {% endfor %}
+        {% endif %}
         {% endfor %}
       </tbody>
     </table>

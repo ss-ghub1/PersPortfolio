@@ -45,6 +45,8 @@
     <h2>Net: {{ "{:,.0f}".format(data.total_sgd) }} SGD <span class="hint">({{ data.rows | length }} rows)</span></h2>
   </section>
 
+  {% include "_yearly_totals.html" %}
+
   <section>
     <table>
       <thead>
