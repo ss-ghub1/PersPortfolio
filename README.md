@@ -487,6 +487,33 @@ Endowus entirely for now; or a partial build - positions only, skipping
 transactions/cash detail, similar to the gap already accepted for DBS's
 CPFIS/SRS).
 
+**A real alternative candidate surfaced since this was first found**: Endowus
+offers a structured Excel export ("GoalExport"), login-required like UBS's
+position snapshot (not a recurring automatic deliverable like the PDF
+statement). Inspected a real Single-account export - genuinely strong on
+the position side: a "Funds by Goal" sheet gives Goal, Fund, ISIN, Asset
+class, Units, Est. value, and a per-fund Price date - matching, arguably
+exceeding, the PDF's Asset Allocation table, with zero OCR risk. An
+"Activity" sheet gives transaction history going back to March 2025 in
+one file - confirmed properly scoped to the account exporting it (no
+cross-account mixing), structured Type/Goal/Account/Amount/Status
+columns. Confirmed available for both Joint and Single.
+
+One real gap not yet resolved, worth thinking through before committing
+to this path: many "Investment" rows in the Activity sheet don't specify
+*which* underlying fund was bought - the goal-level amount is there, but
+fund-level drill-down isn't always present, unlike the PDF's per-goal
+Transactions table which does show that. Would gain real strength on
+positions, might lose some on transaction granularity - needs real
+thought, not a quick call either way.
+
+Decision deliberately deferred until after checking whether September's
+PDF reverts to the old format or confirms the new one is permanent - at
+that point, decide between: rebuilding the PDF parser against the new
+format, switching to this Excel export instead (new ingestion path,
+architecturally separate from PDF parsing - same shape as UBS's existing
+Excel+PDF split), or some hybrid of the two.
+
 In the meantime: do NOT load any Endowus statement using this new format
 with the current parser - it already fails safely (aborts rather than
 loading wrong data), so there's no risk, just don't assume a workaround
