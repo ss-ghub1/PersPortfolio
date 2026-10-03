@@ -340,6 +340,18 @@ def parse_allocation_pages(pages_text):
     return rows
 
 
+# CPF/SRS-funded goals have no cash pool, so a distribution is printed on the goal's own
+# Transactions page as TWO lines (confirmed on the July 2026 Single statement):
+#   21 Jul 2026 Distribution To be reinvested for <fund> <SRS> <units> <price> <amount>   = received
+#   22 Jul 2026 Distribution Buy <fund> <SRS> <units> <price> <amount>                    = reinvested
+# The main pattern below only knows "Distribution reinvested" / "Distribution received", so
+# neither line was ever captured - the month's income was missing and the reinvestment buy
+# with it. Mapped to the same two types the new layout uses, so both layouts land alike.
+DISTRIBUTION_LINE = re.compile(
+    r"^(\d{1,2} \w{3}\w* \d{4})\s+Distribution\s+(To be reinvested for|Buy)\s+(.+?)\s+" + FUNDING_SOURCE +
+    rf"\s+([\d,]+\.?\d*)\s+{MONEY}\s+{MONEY}$")
+
+
 def parse_goal_transactions_pages(pages_text):
     """Returns list of {goal_name, trade_date, txn_type_raw, details, funding_source, units, price, amount}."""
     rows = []
@@ -362,6 +374,22 @@ def parse_goal_transactions_pages(pages_text):
                     "details": m.group(4).strip(), "funding_source": m.group(5),
                     "units": _to_float(m.group(6)), "price": _to_float(m.group(7)),
                     "amount": _to_float(m.group(8)),
+                })
+                continue
+            d = DISTRIBUTION_LINE.match(line)
+            if d:
+                received = d.group(2) != "Buy"
+                rows.append({
+                    "goal_name": goal_name,
+                    "trade_date": _to_iso_date(d.group(1)),
+                    "txn_type_raw": "Distribution received" if received else "Distribution reinvested",
+                    "side": None if received else "Buy",
+                    "details": d.group(3).strip(), "funding_source": d.group(4),
+                    # units/price on a "received" line describe the reinvestment, which has its own
+                    # line - keep them off the income row, as the new layout does
+                    "units": None if received else _to_float(d.group(5)),
+                    "price": None if received else _to_float(d.group(6)),
+                    "amount": _to_float(d.group(7)),
                 })
     return rows
 
@@ -925,6 +953,11 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
                 else:
                     continue
             else:
+                # distributions (received or reinvested) are gains INSIDE the pool, not external
+                # flows - the old rule treated every non-Investment row as an outflow, which
+                # pushed the return the wrong way once these rows were captured at all
+                if t["txn_type_raw"] in ("Distribution received", "Distribution reinvested"):
+                    continue
                 sign = 1 if t["txn_type_raw"] == "Investment" else -1  # Buy=inflow to fund pool, Sell/Redemption=outflow
             flows.append((t["trade_date"], t["amount"] * sign))
         # Deliberately GROSS of fees: fees are paid from cash, not from the

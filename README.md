@@ -541,6 +541,24 @@ Reasons, from evidence rather than preference:
   starting balance, its footnote 3), investments in, redemptions and
   fees out; distributions are gains inside the pool, not flows.
 
+**Distributions in the older layout (fixed).** A CPF/SRS goal has no cash pool, so
+the older layout prints a distribution on the goal's own Transactions page as two
+lines - `Distribution To be reinvested for <fund>` (received) and `Distribution Buy
+<fund>` (reinvested) - which the parser's pattern did not recognise, so neither was
+captured: Single's monthly income (July: 230.35) was missing, and so was the
+reinvestment buy. Both are now mapped to the same two types the new layout uses
+(INCOME / DISTRIBUTION and BUY / REINVESTMENT). The same "Distribution Buy" line
+turned out to be missing on Joint's goal pages too (July: the 728.99 reinvestment).
+Distributions are also no longer counted as external flows in the older layout's
+period return (they are gains inside the pool, as in the new layout), so the
+July -> August return series now uses one convention. Verified against the Excel
+exports: Single's income for July + August is 462.20 in the database and in the
+export; Joint's 1,852.37 is unchanged (its income is read from the cash ledger,
+which the Income page prefers). Only statements that are loaded are affected:
+Single's earlier months (the export shows 179.04, 180.22, 181.45, 227.42 and 228.88
+for Feb-Jun 2026) appear only if those statements are loaded, and a statement
+loaded before this fix needs `--force` once to pick the rows up.
+
 **Known consequences of the new layout:**
 - Holdings are aggregated by fund and funding source. There is no per-goal
   fund composition any more (e.g. what sits inside "Flagship - Balanced"),
@@ -650,18 +668,7 @@ question. Reconsider if per-goal composition becomes important.
    Overview's "Prior Month" column use the FX rate that was actually in
    effect at that time, instead of today's rate (current, deliberate
    simplification - see the Overview section above).
-9. **The older Endowus layout's parser never captured "Distribution
-    received" lines** (they carry no units, so the transaction regex skips
-    them). Single receives a monthly SRS distribution - July's was 230.35
-    per the Excel export, and it is absent from the database; August's
-    231.85 is captured by the new parser and matches the export to the
-    cent. Income for Single before August is understated by these.
-10. The older layout's Modified Dietz treats reinvested distributions as
-    outflows; the new layout's correctly does not (they are gains inside
-    the pool). The July -> August return series therefore mixes two
-    slightly different conventions (the effect is small - under about 0.1
-    percentage point on Joint). Also still open: item 3 above.
-11. **Deferred, larger decisions** (do once the basic web app design is
+9. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,
