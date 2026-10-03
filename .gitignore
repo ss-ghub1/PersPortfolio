@@ -19,3 +19,8 @@ output/
 
 # OS cruft
 .DS_Store
+
+# Endowus export script: the browser profile holds live login cookies; the workbooks hold your holdings
+.endowus_browser/
+endowus_block_log.txt
+Endowus_*Export*.xlsx
