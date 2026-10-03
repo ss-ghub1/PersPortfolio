@@ -1,0 +1,3 @@
+account_id,scope,note
+UBS-0001,SNAPSHOT_VS_LEDGER:USD,"Transaction extract for this account's USD cash sub-account only runs to 2026-03-16 - stale relative to the Sep 2026 position snapshot. Structural gap in source data coverage, not a parsing error."
+UBS-0002,SNAPSHOT_VS_LEDGER:USD,"~10-day gap between when the transaction extract was pulled and the position snapshot's as-of date. Expected timing lag, not a parsing error."
