@@ -1,7 +1,18 @@
 """
-Parses an Endowus monthly statement PDF (scanned, no text layer - requires
-OCR) into positions and transactions, mapped onto the same schema as the
-UBS ingestion.
+Parses an Endowus monthly statement PDF into positions and transactions,
+mapped onto the same schema as the UBS ingestion.
+
+TWO STATEMENT LAYOUTS, TWO READING MODES (both confirmed on real files):
+  - Up to July 2026 ("v1"): per-goal pages. The Joint file is image-only
+    (no text layer, read by OCR); the Single file has a clean text layer.
+    read_pages() uses embedded text where a page has it and OCRs only the
+    pages without - OCR is environment-dependent (the same Single file read
+    its cash balance as 4,269.38 instead of 1,269.38 under one Tesseract
+    build, with every gate still passing).
+  - August 2026 onward ("v2"): a compact layout with one aggregated holdings
+    table, one transactions list and a cash ledger. Both accounts carry a
+    full text layer, so endowus_v2.py parses the embedded text and REFUSES
+    any page without one - it never OCRs.
 
 Endowus structure, for context:
   - One "Goal" = one labeled sub-portfolio, almost always holding a single
@@ -18,12 +29,11 @@ Endowus structure, for context:
     purely as a reconciliation check, not as a data source, the same way
     UBS's running cash balance validated (rather than fed) our parsing.
 
-Because this PDF has no text layer, every number here comes from OCR
-(tesseract at 300 DPI), which is meaningfully less trustworthy than a
-native text extraction. DO NOT relax the reconciliation checks in
-load_endowus_statement() - they're what make this safe to rely on despite
-the OCR risk. A statement that fails reconciliation should be treated as
-unparsed, not silently loaded.
+Where a v1 page has no text layer its numbers come from OCR (tesseract at
+300 DPI), which is meaningfully less trustworthy than native text. DO NOT
+relax the reconciliation checks in load_endowus_statement() - they are what
+make this safe to rely on. A statement that fails reconciliation should be
+treated as unparsed, not silently loaded.
 """
 import os
 import re
@@ -35,6 +45,7 @@ import pypdfium2 as pdfium
 import pytesseract
 
 from db import is_source_file_loaded
+from endowus_v2 import is_v2, parse_v2, isin_valid
 
 # On Windows, the Tesseract OCR engine (a separate install from the
 # pytesseract Python wrapper) often isn't on PATH even after installing.
@@ -93,6 +104,39 @@ def ocr_pages(pdf_path, dpi=300):
         img = bitmap.to_pil()
         pages.append(pytesseract.image_to_string(img))
     return pages
+
+
+# A page with fewer extractable characters than this is treated as an image
+# (OCR needed). Real pages carry hundreds of characters.
+MIN_TEXT_CHARS = 40
+
+
+def text_layer_pages(pdf_path):
+    """Embedded text only, per page - '' for a page without a text layer."""
+    import pdfplumber
+    with pdfplumber.open(pdf_path) as pdf:
+        return [(p.extract_text() or "") for p in pdf.pages]
+
+
+def read_pages(pdf_path, dpi=300):
+    """Page texts: the PDF's own text layer where a page has one, OCR only
+    for pages without. Endowus statements vary by file - confirmed on real
+    statements: July Single has a clean text layer on all 28 pages, July
+    Joint has none (65 image pages), and both August files have full text
+    layers. Text-layer input is exact (all 16 ISINs matched ground truth);
+    OCR is environment-dependent - the same July Single file read its cash
+    balance as 4,269.38 under one Tesseract build (true value 1,269.38) and
+    missed two fee lines, with every reconciliation gate still passing."""
+    texts = text_layer_pages(pdf_path)
+    need_ocr = [i for i, t in enumerate(texts) if len(t.strip()) < MIN_TEXT_CHARS]
+    if need_ocr:
+        doc = pdfium.PdfDocument(pdf_path)
+        for i in need_ocr:
+            bitmap = doc[i].render(scale=dpi / 72)
+            texts[i] = pytesseract.image_to_string(bitmap.to_pil())
+    print(f"[endowus] pages read: {len(texts) - len(need_ocr)} from the text layer, "
+          f"{len(need_ocr)} via OCR")
+    return texts
 
 
 def classify_page(text):
@@ -400,7 +444,15 @@ def _extract_account_email(pages_text):
 
 
 def parse_statement(pdf_path):
-    pages_text = ocr_pages(pdf_path)
+    raw_text = text_layer_pages(pdf_path)
+    if is_v2(raw_text):
+        result = parse_v2(raw_text, Path(pdf_path).name)
+        result["account_email"] = _extract_account_email(raw_text)
+        return result
+    pages_text = read_pages(pdf_path)
+    if is_v2(pages_text):
+        raise ValueError("this looks like the August-2026-onward Endowus layout, but the file has "
+                         "no text layer - refusing to parse it from OCR output")
 
     # The "All Investment Goals" overview page carries the period and
     # headline figures - don't assume it's pages_text[0], since some
@@ -478,6 +530,21 @@ def modified_dietz(bmv, emv, flows, period_start, period_end):
     return (emv - bmv - net_cf) / denom
 
 
+def _other_file_counts(conn, account_id, leg, source_file):
+    """Multiset of (trade_date, txn_type, amount) already loaded for this account
+    and leg from OTHER statement files. Two statements can list the same trade -
+    the July statement lists trades by trade date, the August one by completion
+    date, so a trade dated 31 Jul that completed on 3 Aug appears in both. Found
+    on real statements: it double-counted 81,033.33 of trade flow."""
+    counts = {}
+    for r in conn.execute(
+            """SELECT trade_date, txn_type, round(gross_amount, 2) FROM txn
+               WHERE account_id=? AND source_leg=? AND source_file<>?""",
+            (account_id, leg, source_file)):
+        counts[tuple(r)] = counts.get(tuple(r), 0) + 1
+    return counts
+
+
 # ---------------------------------------------------------------------------
 def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False):
     source_file = Path(pdf_path).name
@@ -486,8 +553,14 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
               f"- OCR not re-run.")
         return None
 
-    parsed = parse_statement(pdf_path)
+    try:
+        parsed = parse_statement(pdf_path)
+    except ValueError as e:
+        print(f"[endowus] ABORT: could not parse {source_file}: {e}")
+        return None
     source_file = parsed["source_file"]
+    fmt = parsed.get("format", "v1")
+    pos_source = "AGG_ALLOCATION" if fmt == "v2" else "GOAL_ALLOCATION"
 
     # Resolve which Endowus account this is from the statement's own
     # footer email, unless the caller explicitly overrode it - closes the
@@ -561,6 +634,33 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
     # row across lines in a way the parser didn't handle) while both other
     # gates still reported success, since they never touched the
     # allocation table at all. ---
+    if fmt == "v2":
+        # The August-2026-onward layout lists holdings aggregated by fund and
+        # funding source, not per goal - so positions can only be checked in
+        # total, against the statement's own investment value (cover page).
+        agg_total = round(sum(r["value"] for r in parsed["allocations"]), 2)
+        ov_total = round(sum(g["ending"] for g in overview.values()), 2)
+        stated_inv = parsed["cover"]["investment_value"]
+        if abs(agg_total - stated_inv) > 0.05 or abs(ov_total - stated_inv) > 0.05:
+            print(f"[endowus] ABORT: holdings total {agg_total:.2f} / goal endings {ov_total:.2f} do not "
+                  f"match the statement's investment value {stated_inv:.2f}. Not loading.")
+            return None
+        print(f"[endowus] Reconciliation OK: {len(parsed['allocations'])} fund holdings sum to "
+              f"{agg_total:.2f} = sum of {len(overview)} goal endings = stated investment value")
+        # Completeness of the transaction parse: trades dated inside the period
+        # must reproduce the statement's own "Net investment (B)" (trades dated
+        # before the period sit inside the starting balance - footnote 3).
+        hl = parsed["headline"]
+        in_period = [t for t in parsed["goal_transactions"] if hl["start_date"] <= t["trade_date"] <= hl["end_date"]]
+        net_flow = (sum(t["amount"] for t in in_period if t["txn_type_raw"] == "Investment")
+                    - sum(t["amount"] for t in in_period if t["txn_type_raw"] == "Redemption"))
+        if abs(net_flow - hl["net_investment"]) > 0.05:
+            print(f"[endowus] ABORT: transactions dated in the period net to {net_flow:.2f} but the statement's "
+                  f"Net investment is {hl['net_investment']:.2f} - a transaction was dropped or mis-parsed. Not loading.")
+            return None
+        print(f"[endowus] Reconciliation OK: in-period investments less redemptions = {net_flow:.2f} "
+              f"(matches the statement's Net investment)")
+
     alloc_totals_by_goal = {}
     for row in parsed["allocations"]:
         if row["source"] != "GOAL_ALLOCATION" or not row["value"]:
@@ -569,7 +669,7 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
         alloc_totals_by_goal[key] = alloc_totals_by_goal.get(key, 0.0) + row["value"]
 
     alloc_check_failed = False
-    for goal_name, g in overview.items():
+    for goal_name, g in (overview.items() if fmt == "v1" else ()):
         key = goal_name.strip().lower()
         alloc_total = alloc_totals_by_goal.get(key)
         if alloc_total is None:
@@ -592,8 +692,9 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
             alloc_check_failed = True
     if alloc_check_failed:
         return None
-    print(f"[endowus] Reconciliation OK: allocation-table totals match the overview table's "
-          f"ending balance for all {len(overview)} goals - positions are complete.")
+    if fmt == "v1":
+        print(f"[endowus] Reconciliation OK: allocation-table totals match the overview table's "
+              f"ending balance for all {len(overview)} goals - positions are complete.")
 
     account_id = conn.execute(
         "SELECT account_id FROM account WHERE institution_id='Endowus' AND native_account_code=?",
@@ -640,7 +741,7 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
         (account_id, parsed["period_end"]),
     )
     for row in parsed["allocations"]:
-        if row["source"] != "GOAL_ALLOCATION" or not row["value"]:
+        if row["source"] != pos_source or not row["value"]:
             continue
         instrument_id = row["isin"] or f"NAME:{row['fund_name']}"
         conn.execute(
@@ -677,7 +778,14 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
 
     # --- Cash-leg transactions (fees, deposits, buys, sells, distributions) ---
     n_cash_txn = 0
+    other_cash = _other_file_counts(conn, account_id, "CASH", source_file)
+    skipped_cash = []
     for i, t in enumerate(cb["transactions"]):
+        k = (t["trade_date"], t["txn_type"], round(t["gross_amount"], 2))
+        if other_cash.get(k, 0) > 0:
+            other_cash[k] -= 1
+            skipped_cash.append(k)
+            continue
         cur = conn.execute(
             """INSERT OR IGNORE INTO txn
                  (account_id, instrument_id, source_leg, trade_date, txn_type, txn_subtype,
@@ -692,18 +800,32 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
 
     # --- Security-leg transactions (unit-level trade detail per goal) ---
     n_sec_txn = 0
-    type_map = {"Investment": "BUY", "Redemption": "SELL", "Distribution reinvested": "BUY", "Fee": "FEE"}
+    other_sec = _other_file_counts(conn, account_id, "SECURITY", source_file)
+    skipped_sec = []
+    type_map = {"Investment": "BUY", "Redemption": "SELL", "Distribution reinvested": "BUY",
+                "Fee": "FEE", "Distribution received": "INCOME"}
     for i, t in enumerate(parsed["goal_transactions"]):
         instrument_id = None
-        for row in parsed["allocations"]:
-            if row["source"] != "GOAL_ALLOCATION":
-                continue
-            if row["fund_name"] and t["details"] and row["fund_name"].startswith(t["details"][:20]):
-                instrument_id = row["isin"] or f"NAME:{row['fund_name']}"
-                break
+        if fmt == "v2" and t.get("isin"):
+            # the new layout prints the ISIN on every trade (exact, not matched by
+            # name). A fund can be fully sold and so absent from holdings, hence
+            # the instrument row is created here if it does not exist yet.
+            instrument_id = t["isin"]
+            conn.execute(
+                """INSERT OR IGNORE INTO instrument (instrument_id, isin, name, instrument_currency)
+                   VALUES (?, ?, ?, 'SGD')""", (instrument_id, t["isin"], t["details"] or t["isin"]))
+        else:
+            for row in parsed["allocations"]:
+                if row["source"] != "GOAL_ALLOCATION":
+                    continue
+                if row["fund_name"] and t["details"] and row["fund_name"].startswith(t["details"][:20]):
+                    instrument_id = row["isin"] or f"NAME:{row['fund_name']}"
+                    break
         txn_type = type_map.get(t["txn_type_raw"], "OTHER")
         if t["txn_type_raw"] == "Distribution reinvested":
             subtype = "REINVESTMENT"
+        elif t["txn_type_raw"] == "Distribution received":
+            subtype = "DISTRIBUTION"
         elif t["txn_type_raw"] == "Fee":
             # Endowus charges its advisory fee by selling a small unit
             # fraction directly, for goals with no cash pool to deduct from
@@ -711,6 +833,22 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
             subtype = "ADVISORY_FEE"
         else:
             subtype = None
+        signed_amount = t["amount"] * (-1 if txn_type in ("BUY", "FEE") else 1)
+        k = (t["trade_date"], txn_type, round(signed_amount, 2))
+        if other_sec.get(k, 0) > 0:
+            other_sec[k] -= 1
+            skipped_sec.append(k)
+            # keep the existing row, but replace a missing/garbled instrument ID
+            # (OCR-era statements) with the exact ISIN this statement prints
+            if isin_valid(instrument_id):
+                old = conn.execute(
+                    """SELECT rowid, instrument_id FROM txn WHERE account_id=? AND source_leg='SECURITY'
+                       AND source_file<>? AND trade_date=? AND txn_type=? AND round(gross_amount,2)=?
+                       ORDER BY rowid LIMIT 1""",
+                    (account_id, source_file, t["trade_date"], txn_type, round(signed_amount, 2))).fetchone()
+                if old and not isin_valid(old[1]):
+                    conn.execute("UPDATE txn SET instrument_id=? WHERE rowid=?", (instrument_id, old[0]))
+            continue
         cur = conn.execute(
             """INSERT OR IGNORE INTO txn
                  (account_id, instrument_id, source_leg, trade_date, txn_type, txn_subtype,
@@ -723,6 +861,11 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
         )
         n_sec_txn += cur.rowcount
 
+    for leg, skipped in (("cash", skipped_cash), ("security", skipped_sec)):
+        if skipped:
+            print(f"[endowus] NOTE: skipped {len(skipped)} {leg} txn(s) already loaded from another "
+                  f"statement file (cross-month overlap): "
+                  + "; ".join(f"{d} {ty} {a:,.2f}" for d, ty, a in skipped))
     conn.commit()
     print(f"[endowus] {source_file}: loaded {n_positions} positions, {n_cash_txn} cash txns, "
           f"{n_sec_txn} security txns")
@@ -734,7 +877,20 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
     if headline.get("starting_balance") and headline.get("ending_balance") and headline.get("start_date"):
         flows = []
         for t in parsed["goal_transactions"]:
-            sign = 1 if t["txn_type_raw"] == "Investment" else -1  # Buy=inflow to fund pool, Sell/Redemption=outflow
+            if fmt == "v2":
+                # trades dated before the period are already inside the statement's
+                # starting balance; distributions (received or reinvested) are gains
+                # within the pool, not external flows.
+                if not (headline["start_date"] <= t["trade_date"] <= (headline.get("end_date") or parsed["period_end"])):
+                    continue
+                if t["txn_type_raw"] == "Investment":
+                    sign = 1
+                elif t["txn_type_raw"] in ("Redemption", "Fee"):
+                    sign = -1
+                else:
+                    continue
+            else:
+                sign = 1 if t["txn_type_raw"] == "Investment" else -1  # Buy=inflow to fund pool, Sell/Redemption=outflow
             flows.append((t["trade_date"], t["amount"] * sign))
         # Deliberately GROSS of fees: fees are paid from cash, not from the
         # fund balance BMV/EMV are based on, so folding a fee into this flow

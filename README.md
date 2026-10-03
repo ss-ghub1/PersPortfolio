@@ -26,7 +26,8 @@ portfolio_tracker/
   ingest_positions.py            # parses a UBS-style position snapshot workbook
   ingest_transactions.py         # parses security-leg + per-currency cash-leg tabs (xlsx or csv)
   ingest_statement_pdf.py        # parses UBS statement PDFs' own monthly/annual TWR tables
-  ingest_endowus_pdf.py          # parses Endowus statement PDFs (scanned/OCR-based)
+  ingest_endowus_pdf.py          # parses Endowus statement PDFs (text layer first, OCR only where a page has none)
+  endowus_v2.py                  # Endowus August-2026-onward layout: text-only parser, never OCR
   postprocess.py                 # detects transfers between your own accounts
   reconcile.py                   # the validation checks described above
   performance.py                 # statement-based (authoritative) + transaction-derived performance
@@ -145,9 +146,13 @@ positions and transactions, plus PDF statements for authoritative TWR.
 Handled by `ingest_positions.py` / `ingest_transactions.py` / `run_monthly_load.py`.
 
 **Endowus** (2 accounts: Joint, Single) - no structured export exists on
-this platform, only a scanned monthly PDF statement (no text layer). Handled
-entirely by `ingest_endowus_pdf.py`, which OCRs each page (tesseract, 300 DPI)
-and extracts positions, fees, deposits, and trades from it.
+this platform, only a monthly PDF statement. Handled by
+`ingest_endowus_pdf.py`, which reads each page's embedded text and OCRs
+(tesseract, 300 DPI) only a page that has none - statements vary by file
+(July Joint is image-only; July Single and both August files have text), and
+the layout changed in August 2026 (parsed by `endowus_v2.py`, text only).
+See "Endowus changed its statement format in August 2026" below. It extracts
+positions, fees, deposits, and trades.
 ```bash
 python3 ingest_endowus_pdf.py /path/to/statement.pdf --load
 ```
@@ -456,68 +461,82 @@ you hit them. Ordered by how much they could actually bite you.
    stays the reporting currency; would need actual code changes, not
    config, if that ever changed.
 
-## Known issue: Endowus changed its statement format (August 2026)
+## Endowus changed its statement format in August 2026 (resolved)
 
-Confirmed via direct inspection, not assumed: both Joint's and Single's
-August 2026 statements use a different page structure than the July ones
-`ingest_endowus_pdf.py` was built against - every page classifies as
-`OTHER` under the current parser, and loading either account's August
-statement aborts (`could not find cash starting/ending balance`) rather
-than silently loading anything wrong. Confirmed platform-wide (both
-accounts show the identical new structure), not account-specific.
+Both the Joint and Single August 2026 statements use a new, much more
+compact layout (confirmed on real files, platform-wide): "Goals summary
+(by currency / by goal / footnotes)", ONE "Aggregated asset allocation"
+table (by fund and funding source - not per goal), ONE "Completed
+transactions for all goals" list, and "Cash balance overview" plus a
+"Cash balance (SGD)" ledger. Joint shrank from 65 pages to 28. The old
+parser classified every page as OTHER and aborted safely (nothing wrong was
+loaded).
 
-What changed, old -> new:
-- "All Investment Goals" -> "Table of contents" + "Goals summary (by
-  currency / by goal / footnotes)" as separate pages
-- "Aggregated Asset Allocation" -> "Aggregated asset allocation"; per-goal
-  allocation pages also appear to have lost their goal-name header
-- **Per-goal transaction pages -> one single "Completed transactions for
-  all goals" page** - the most structurally significant change, since the
-  whole SECURITY-leg parsing approach assumes one page per goal
-- "Cash Balance" -> "Cash balance overview" + separate "Cash balance
-  (SGD)" pages
+**Decision: parse the PDF's embedded text; do not rebuild OCR, and do not
+adopt the login-based Excel export.** Both August files carry a full text
+layer (Joint 28/28 pages, Single 17/17), and everything needed is in it.
+Reasons, from evidence rather than preference:
+- *Accuracy.* Text is exact; OCR is not and varies by machine. The same
+  July Single file read its cash balance as 4,269.38 (true: 1,269.38) and
+  missed two fee lines under one Tesseract build, with every gate still
+  passing. On text, the existing parser reproduced the Excel export's July
+  buys (68,000) and fees (211.23) exactly.
+- *The PDF has what the export lacks:* the authoritative month-end value
+  and the cash balance (the export has no cash line and is a point-in-time
+  snapshot - prices dated the export day, not month-end).
+- *Maintenance.* Same technology as CDP/DBS/IBKR/UBS (pdfplumber). No
+  browser automation, login/2FA, rate limits (the export script has
+  already tripped Endowus's WAF_429 once), terms-of-use question, or
+  Tesseract install for these files.
 
-Deliberately holding off on any parser changes until confirming whether
-this is a permanent platform change or a one-off - check whichever
-statement comes after August next. If the new format persists, this
-becomes real work (comparable in scope to the original Endowus build,
-not a quick patch) and needs a scoping conversation before starting -
-see the three options discussed (full new-format support; hold off on
-Endowus entirely for now; or a partial build - positions only, skipping
-transactions/cash detail, similar to the gap already accepted for DBS's
-CPFIS/SRS).
+**How it works now** (`ingest_endowus_pdf.py` + `endowus_v2.py`):
+- `read_pages()` reads each page's text layer first and OCRs only pages
+  that have none (July Joint is still image-only; it still loads, via OCR).
+- A file in the new layout is parsed by `endowus_v2.py` from text ONLY. Any
+  page without text, an unknown transaction/ledger type, a non-SGD
+  currency, or a column count that does not line up raises an error and
+  the load is refused. It never falls back to OCR for this layout.
+- Gates (all must pass before anything is written): cover page (investment
+  + cash = total); cash-ledger replay to the stated ending balance; every
+  goal's A+B+C+D = ending; the fund rows sum to the statement's own Total,
+  to the goal endings and to the investment value; **trades dated inside
+  the period net to the statement's own "Net investment (B)"** (this
+  catches a dropped trade - verified by removing one); and **every ISIN must
+  pass its check digit** (Luhn over the letter-expanded digits - all 102
+  real ISINs from five independent sources pass, every OCR-garbled variant
+  seen fails; shape alone cannot tell letter O from digit 0).
+- Cross-statement de-duplication: a trade dated 31 Jul that completed on
+  3 Aug is listed by the July statement (by trade date) and the August one
+  (by completion date) - found on real files, it double-counted 81,033.33.
+  The loader now skips a trade already loaded from another statement file,
+  says so ("NOTE: skipped N ... cross-month overlap"), and upgrades a
+  missing/garbled instrument ID to the exact ISIN. The end state is
+  identical whichever statement is loaded first (tested both orders).
+- Period return for the new layout uses only genuine external flows:
+  trades dated inside the period (earlier ones sit inside the statement's
+  starting balance, its footnote 3), investments in, redemptions and
+  fees out; distributions are gains inside the pool, not flows.
 
-**A real alternative candidate surfaced since this was first found**: Endowus
-offers a structured Excel export ("GoalExport"), login-required like UBS's
-position snapshot (not a recurring automatic deliverable like the PDF
-statement). Inspected a real Single-account export - genuinely strong on
-the position side: a "Funds by Goal" sheet gives Goal, Fund, ISIN, Asset
-class, Units, Est. value, and a per-fund Price date - matching, arguably
-exceeding, the PDF's Asset Allocation table, with zero OCR risk. An
-"Activity" sheet gives transaction history going back to March 2025 in
-one file - confirmed properly scoped to the account exporting it (no
-cross-account mixing), structured Type/Goal/Account/Amount/Status
-columns. Confirmed available for both Joint and Single.
+**Known consequences of the new layout:**
+- Holdings are aggregated by fund and funding source. There is no per-goal
+  fund composition any more (e.g. what sits inside "Flagship - Balanced"),
+  and goal names are truncated with an ellipsis, so per-goal checks use
+  column position rather than names. Instrument-level positions, totals
+  and asset allocation are unaffected.
+- Only SGD statements are supported (a non-SGD currency block aborts).
+- Cash-ledger types are an explicit list; a new type (e.g. a fee variant)
+  aborts the load naming the row, rather than being skipped.
+- Cashback is recorded as INCOME / CASHBACK (the older layout dropped it).
 
-One real gap not yet resolved, worth thinking through before committing
-to this path: many "Investment" rows in the Activity sheet don't specify
-*which* underlying fund was bought - the goal-level amount is there, but
-fund-level drill-down isn't always present, unlike the PDF's per-goal
-Transactions table which does show that. Would gain real strength on
-positions, might lose some on transaction granularity - needs real
-thought, not a quick call either way.
-
-Decision deliberately deferred until after checking whether September's
-PDF reverts to the old format or confirms the new one is permanent - at
-that point, decide between: rebuilding the PDF parser against the new
-format, switching to this Excel export instead (new ingestion path,
-architecturally separate from PDF parsing - same shape as UBS's existing
-Excel+PDF split), or some hybrid of the two.
-
-In the meantime: do NOT load any Endowus statement using this new format
-with the current parser - it already fails safely (aborts rather than
-loading wrong data), so there's no risk, just don't assume a workaround
-exists yet.
+**The Excel export / scraper is parked, not integrated.** Findings kept for
+if it is ever wanted: a Joint export with all sheets reconciles tightly
+(Funds by Goal rolled up to Underlying Funds matches to 0.0000 units; Goal
+Check ties every goal to the Dashboard), has per-goal fund composition and
+fund-level trades the PDF no longer shows, and its ISINs are clean. Against
+it: no cash balance (the script discards the Dashboard's CASH MANAGEMENT
+section), not month-end, a scraper that depends on Endowus's page layout
+and that cannot be run or tested in this environment, and a terms-of-use
+question. Reconsider if per-goal composition becomes important.
 
 ## Not built yet (next steps, roughly in order)
 
@@ -532,8 +551,9 @@ exists yet.
    the statement's own content (already true for every PDF loader); skips
    files already loaded (now trivial - reuses `is_source_file_loaded()`
    directly). Flagged risk to keep in mind when building this: don't
-   detect Endowus by "OCR found no text layer" - that shortcut breaks the
-   moment a second scanned-PDF institution exists. Use explicit branding-
+   detect Endowus by "OCR found no text layer" - Endowus statements now
+   usually HAVE a text layer (and that shortcut would break the moment a
+   second scanned-PDF institution exists anyway). Use explicit branding-
    text matching for every institution, including Endowus, from the start.
 2. CDP (and possibly DBS's CPFIS-OA equity holdings - same situation)
    performance: a simple cost-vs-current-market-value comparison, NOT a
@@ -578,7 +598,26 @@ exists yet.
    Overview's "Prior Month" column use the FX rate that was actually in
    effect at that time, instead of today's rate (current, deliberate
    simplification - see the Overview section above).
-9. **Deferred, larger decisions** (do once the basic web app design is
+9. **Garbled instrument IDs from OCR-era loads.** July Joint was read by
+   OCR: 17 of its 26 instrument IDs fail the ISIN check digit (letter O
+   for digit 0, Q for 0) or fell back to `NAME:` placeholders, so the same
+   fund has one ID in July and another (correct) one from August on, and
+   instrument-level history is fragmented. Now that August supplies the
+   exact ISINs, do a one-time remap by fund name across `instrument`,
+   `position_snapshot` and `txn`, using `endowus_v2.isin_valid()` to pick
+   the survivors. (The cross-month trades are already upgraded on load.)
+10. **The older Endowus layout's parser never captured "Distribution
+    received" lines** (they carry no units, so the transaction regex skips
+    them). Single receives a monthly SRS distribution - July's was 230.35
+    per the Excel export, and it is absent from the database; August's
+    231.85 is captured by the new parser and matches the export to the
+    cent. Income for Single before August is understated by these.
+11. The older layout's Modified Dietz treats reinvested distributions as
+    outflows; the new layout's correctly does not (they are gains inside
+    the pool). The July -> August return series therefore mixes two
+    slightly different conventions (the effect is small - under about 0.1
+    percentage point on Joint). Also still open: item 3 above.
+12. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,
