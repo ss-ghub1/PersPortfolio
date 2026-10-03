@@ -458,6 +458,12 @@ def _load_one_ibkr_account(conn, native_code, data, source_file, period):
         )
         n_positions += 1
 
+    # A forced reload REPLACES this statement's transactions rather than adding to them (same
+    # pattern as positions). INSERT OR IGNORE cannot do this job: cash rows have no instrument or
+    # quantity, SQLite treats NULLs as distinct in a UNIQUE constraint, so it never fires and a
+    # forced reload used to store every row a second time.
+    conn.execute("DELETE FROM txn WHERE account_id=? AND source_file=?", (account_id, source_file))
+
     # SECURITY leg: trades
     n_sec = 0
     for i, t in enumerate(data["trades"]):

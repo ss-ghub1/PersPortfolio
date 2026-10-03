@@ -291,6 +291,11 @@ def load_cdp_statement(pdf_path, conn, account_native_code=None, force=False):
             print(f"[cdp] NOTE: {b['name']} valued at face ({b['face_value']:,.2f}) - "
                   f"not exchange-traded, no market price available.")
 
+    # A forced reload REPLACES this statement's transactions rather than adding to them (same
+    # pattern as positions). INSERT OR IGNORE cannot do this job: cash rows have no instrument or
+    # quantity, SQLite treats NULLs as distinct in a UNIQUE constraint, so it never fires and a
+    # forced reload used to store every row a second time.
+    conn.execute("DELETE FROM txn WHERE account_id=? AND source_file=?", (account_id, source_file))
     n_txn = 0
     for i, t in enumerate(parsed["cash_transactions"]):
         desc = t["description"]

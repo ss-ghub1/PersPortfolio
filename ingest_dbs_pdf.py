@@ -380,6 +380,11 @@ def load_dbs_statement(pdf_path, conn, force=False):
         n_positions += 1
 
     # --- Cash transactions ---
+    # A forced reload REPLACES this statement's transactions rather than adding to them (same
+    # pattern as positions). INSERT OR IGNORE cannot do this job: cash rows have no instrument or
+    # quantity, SQLite treats NULLs as distinct in a UNIQUE constraint, so it never fires and a
+    # forced reload used to store every row a second time.
+    conn.execute("DELETE FROM txn WHERE source_file=?", (source_file,))
     for i, t in enumerate(parsed["cash_transactions"]):
         account_id = resolve(t["account_no"])
         if not account_id:

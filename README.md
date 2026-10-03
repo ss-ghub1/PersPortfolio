@@ -30,7 +30,8 @@ portfolio_tracker/
   endowus_v2.py                  # Endowus August-2026-onward layout: text-only parser, never OCR
   isin_tools.py                  # ISIN check digit, OCR look-alike matching, instrument-ID resolver
   fix_instrument_ids.py          # repairs OCR-garbled instrument IDs (dry run first, backs up before --apply)
-  check_duplicate_txns.py        # read-only: finds transaction rows stored more than once
+  check_duplicate_txns.py        # read-only: finds transaction rows a forced reload stored more than once
+  fix_duplicate_txns.py          # removes them (dry run first, backs up before --apply)
   postprocess.py                 # detects transfers between your own accounts
   reconcile.py                   # the validation checks described above
   performance.py                 # statement-based (authoritative) + transaction-derived performance
@@ -316,15 +317,25 @@ This means re-running last month's command by accident is now safe. It
 does NOT mean position loading was always safe to repeat - see the next
 section for why that used to double your numbers.
 
-**Caution on `--force` and transactions.** Positions are replaced on a forced
-reload, but in the IBKR, CDP and DBS loaders a forced reload ADDS the
-statement's transactions a second time (tested: one July file took IBKR from
-21 to 36 rows, CDP 6 to 12, DBS 12 to 24). Cash-type rows have no instrument
-or quantity, SQLite treats NULLs as distinct in a UNIQUE constraint, so
-`INSERT OR IGNORE` ignores nothing. Endowus is fixed (a forced reload replaces
-that statement's rows). Until the others are fixed, avoid `--force` on them
-and run `python check_duplicate_txns.py` (read-only) to see whether your
-database already holds copies - see to-do item 11.
+**`--force` and transactions (fixed).** Positions were always replaced on a
+forced reload, but the IBKR, CDP, DBS and Endowus loaders used to ADD that
+statement's transactions a second time (tested: one July file took IBKR from 21
+to 36 rows, CDP 6 to 12, DBS 12 to 24). Cash-type rows have no instrument or
+quantity, SQLite treats NULLs as distinct in a UNIQUE constraint, so
+`INSERT OR IGNORE` ignored nothing. All four loaders now delete that statement's
+rows before inserting them, so a forced reload leaves the table identical
+(verified by content fingerprint, not just row count). For data already affected:
+`python check_duplicate_txns.py` (read-only) reports it and
+`python fix_duplicate_txns.py` (dry run by default, backs up before `--apply`)
+removes the surplus copies, keeping the first-loaded one. It only acts where
+every copy is identical and the reference is the loaders' own per-row
+'<file>:<leg>:<n>' form; copies that differ, and all UBS rows, are never touched.
+Lesson recorded: the first version of the checker included UBS rows and
+reported 123 "duplicates" worth 641,521 in Portfolio 4. They were separate
+transactions - UBS's reference is the bank's, can repeat across genuinely
+different rows (batch transfers, partial fills) and is sometimes empty.
+Deleting them would have destroyed real data; the claim was tested against the
+source file before anything was proposed.
 
 ## A real bug we hit for real: position loading was not idempotent
 
@@ -650,14 +661,7 @@ question. Reconsider if per-goal composition becomes important.
     the pool). The July -> August return series therefore mixes two
     slightly different conventions (the effect is small - under about 0.1
     percentage point on Joint). Also still open: item 3 above.
-11. **Forced reloads duplicate transactions in the IBKR, CDP and DBS
-    loaders** (Endowus fixed). Confirmed by test, see the --force caution
-    above. `check_duplicate_txns.py` (read-only) shows whether a database is
-    affected - e.g. an IBKR statement loaded, then reloaded with `--force`.
-    Fix: the delete-before-insert pattern Endowus now uses, in each loader,
-    plus a dry-run-first tool to remove copies already stored. Worth also
-    surfacing as a Data Health check.
-12. **Deferred, larger decisions** (do once the basic web app design is
+11. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers
       (Option B) - touches `accounts.csv`, `account_alias.csv`,
