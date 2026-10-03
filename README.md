@@ -28,6 +28,9 @@ portfolio_tracker/
   ingest_statement_pdf.py        # parses UBS statement PDFs' own monthly/annual TWR tables
   ingest_endowus_pdf.py          # parses Endowus statement PDFs (text layer first, OCR only where a page has none)
   endowus_v2.py                  # Endowus August-2026-onward layout: text-only parser, never OCR
+  isin_tools.py                  # ISIN check digit, OCR look-alike matching, instrument-ID resolver
+  fix_instrument_ids.py          # repairs OCR-garbled instrument IDs (dry run first, backs up before --apply)
+  check_duplicate_txns.py        # read-only: finds transaction rows stored more than once
   postprocess.py                 # detects transfers between your own accounts
   reconcile.py                   # the validation checks described above
   performance.py                 # statement-based (authoritative) + transaction-derived performance
@@ -313,6 +316,16 @@ This means re-running last month's command by accident is now safe. It
 does NOT mean position loading was always safe to repeat - see the next
 section for why that used to double your numbers.
 
+**Caution on `--force` and transactions.** Positions are replaced on a forced
+reload, but in the IBKR, CDP and DBS loaders a forced reload ADDS the
+statement's transactions a second time (tested: one July file took IBKR from
+21 to 36 rows, CDP 6 to 12, DBS 12 to 24). Cash-type rows have no instrument
+or quantity, SQLite treats NULLs as distinct in a UNIQUE constraint, so
+`INSERT OR IGNORE` ignores nothing. Endowus is fixed (a forced reload replaces
+that statement's rows). Until the others are fixed, avoid `--force` on them
+and run `python check_duplicate_txns.py` (read-only) to see whether your
+database already holds copies - see to-do item 11.
+
 ## A real bug we hit for real: position loading was not idempotent
 
 Loading the same position snapshot twice used to silently double every
@@ -528,6 +541,34 @@ Reasons, from evidence rather than preference:
   aborts the load naming the row, rather than being skipped.
 - Cashback is recorded as INCOME / CASHBACK (the older layout dropped it).
 
+**Instrument IDs from OCR-read statements, and the repair.** OCR turns the
+digit 0 into letter O or Q ('IEOOOXNHMJW8' for the real 'IE000XNHMJW8') or finds
+no ISIN at all (a `NAME:<fund>` placeholder), so a fund read by OCR in July and
+by text from August had two IDs and its history was split. Shape alone cannot
+detect this (the garbled ID has the same shape); the ISIN check digit does.
+```bash
+python fix_instrument_ids.py            # DRY RUN: lists every repair and the evidence, changes nothing
+python fix_instrument_ids.py --apply    # backs up data/portfolio.db first, then repairs
+```
+Evidence for a repair: the garbled ID differs from a known-valid ISIN only in OCR
+look-alike characters AND the fund names agree (or, for a placeholder, the name
+matches); where a name fits two real funds it picks the one the same account
+actually holds, and says so. It never guesses - no match, an ambiguous match or
+an ID shared with another institution is reported and left alone. The dry run
+performs the real updates inside a transaction and rolls back, so a passing dry
+run means `--apply` will pass; per-account row counts and amounts, the absence
+of new duplicate rows and the surviving names must be identical before and
+after, or everything is rolled back. Idempotent. Tested on real data (14 repairs,
+nothing unresolved) and against awkward cases (no match, ambiguous, shared,
+forced collision). The loader also repairs OCR-read IDs against known ISINs at
+load time, so a forced reload of an OCR-era statement cannot re-create them
+(an OCR name never overwrites an exact one already stored). The exact set of
+garbled IDs depends on the Tesseract build, which is why this works on whatever
+is in the database rather than from a fixed mapping.
+Small known limitation: the older layout cannot identify a fully redeemed fund,
+so a forced reload of July Joint leaves that one trade's instrument empty until
+August is force-reloaded.
+
 **The Excel export / scraper is parked, not integrated.** Findings kept for
 if it is ever wanted: a Joint export with all sheets reconciles tightly
 (Funds by Goal rolled up to Underlying Funds matches to 0.0000 units; Goal
@@ -598,25 +639,24 @@ question. Reconsider if per-goal composition becomes important.
    Overview's "Prior Month" column use the FX rate that was actually in
    effect at that time, instead of today's rate (current, deliberate
    simplification - see the Overview section above).
-9. **Garbled instrument IDs from OCR-era loads.** July Joint was read by
-   OCR: 17 of its 26 instrument IDs fail the ISIN check digit (letter O
-   for digit 0, Q for 0) or fell back to `NAME:` placeholders, so the same
-   fund has one ID in July and another (correct) one from August on, and
-   instrument-level history is fragmented. Now that August supplies the
-   exact ISINs, do a one-time remap by fund name across `instrument`,
-   `position_snapshot` and `txn`, using `endowus_v2.isin_valid()` to pick
-   the survivors. (The cross-month trades are already upgraded on load.)
-10. **The older Endowus layout's parser never captured "Distribution
+9. **The older Endowus layout's parser never captured "Distribution
     received" lines** (they carry no units, so the transaction regex skips
     them). Single receives a monthly SRS distribution - July's was 230.35
     per the Excel export, and it is absent from the database; August's
     231.85 is captured by the new parser and matches the export to the
     cent. Income for Single before August is understated by these.
-11. The older layout's Modified Dietz treats reinvested distributions as
+10. The older layout's Modified Dietz treats reinvested distributions as
     outflows; the new layout's correctly does not (they are gains inside
     the pool). The July -> August return series therefore mixes two
     slightly different conventions (the effect is small - under about 0.1
     percentage point on Joint). Also still open: item 3 above.
+11. **Forced reloads duplicate transactions in the IBKR, CDP and DBS
+    loaders** (Endowus fixed). Confirmed by test, see the --force caution
+    above. `check_duplicate_txns.py` (read-only) shows whether a database is
+    affected - e.g. an IBKR statement loaded, then reloaded with `--force`.
+    Fix: the delete-before-insert pattern Endowus now uses, in each loader,
+    plus a dry-run-first tool to remove copies already stored. Worth also
+    surfacing as a Data Health check.
 12. **Deferred, larger decisions** (do once the basic web app design is
     proven out, not before):
     - Rename internal account IDs to real institution identifiers

@@ -45,7 +45,8 @@ import pypdfium2 as pdfium
 import pytesseract
 
 from db import is_source_file_loaded
-from endowus_v2 import is_v2, parse_v2, isin_valid
+from endowus_v2 import is_v2, parse_v2
+from isin_tools import isin_valid, resolve_instrument_id
 
 # On Windows, the Tesseract OCR engine (a separate install from the
 # pytesseract Python wrapper) often isn't on PATH even after installing.
@@ -545,6 +546,33 @@ def _other_file_counts(conn, account_id, leg, source_file):
     return counts
 
 
+def _canonicalize_allocation_ids(conn, account_id, allocations):
+    """OCR-read allocation rows can carry a garbled ISIN ('IEOOOXNHMJW8' for the real
+    'IE000XNHMJW8') or none at all. Where the table already knows the real ISIN of
+    that fund, use it - otherwise a forced reload of an OCR-era statement would
+    quietly re-create the very IDs fix_instrument_ids.py removes. Strictly the
+    same evidence the repair tool uses; anything it cannot resolve is left
+    exactly as parsed (and stays visible to the tool)."""
+    known = {r[0]: r[1] for r in conn.execute("SELECT instrument_id, name FROM instrument")
+             if isin_valid(r[0])}
+    held = {r[0] for r in conn.execute(
+        """SELECT DISTINCT instrument_id FROM position_snapshot WHERE account_id=?
+           UNION SELECT DISTINCT instrument_id FROM txn WHERE account_id=?""", (account_id, account_id))
+            if r[0] and isin_valid(r[0])}
+    notes = []
+    for row in allocations:
+        if row.get("isin") and isin_valid(row["isin"]):
+            continue
+        bad = row.get("isin") or f"NAME:{row['fund_name']}"
+        new_id, how = resolve_instrument_id(bad, row["fund_name"], known, held)
+        if new_id:
+            notes.append(f"{bad} -> {new_id}")
+            row["isin"] = new_id
+    if notes:
+        print(f"[endowus] NOTE: repaired {len(notes)} OCR-read instrument ID(s) to known ISINs: "
+              + "; ".join(notes))
+
+
 # ---------------------------------------------------------------------------
 def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False):
     source_file = Path(pdf_path).name
@@ -735,6 +763,8 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
     # --- Positions: one row per fund holding (from GOAL_ALLOCATION pages,
     # the per-goal detail - not AGG_ALLOCATION, which repeats the same
     # holdings in a combined table and would double-count if also loaded) ---
+    if fmt == "v1":
+        _canonicalize_allocation_ids(conn, account_id, parsed["allocations"])
     n_positions = 0
     conn.execute(
         "DELETE FROM position_snapshot WHERE account_id=? AND as_of_date=?",
@@ -748,7 +778,7 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
             """INSERT INTO instrument (instrument_id, isin, name, asset_class, instrument_currency)
                VALUES (?, ?, ?, ?, 'SGD')
                ON CONFLICT(instrument_id) DO UPDATE SET
-                 name=excluded.name,
+                 name=""" + ("excluded.name" if fmt == "v2" else "COALESCE(instrument.name, excluded.name)") + """,
                  asset_class=COALESCE(instrument.asset_class, excluded.asset_class)""",
             (instrument_id, row["isin"], row["fund_name"], row["asset_class"]),
         )
@@ -777,6 +807,11 @@ def load_endowus_statement(pdf_path, conn, account_native_code=None, force=False
     n_positions += 1
 
     # --- Cash-leg transactions (fees, deposits, buys, sells, distributions) ---
+    # A forced reload REPLACES this statement's transactions rather than adding to them
+    # (same pattern as positions). INSERT OR IGNORE cannot do this job here: cash rows have
+    # no instrument or quantity, SQLite treats NULLs as distinct in a UNIQUE constraint,
+    # so the constraint never fires - found when a forced reload added 24 duplicate rows.
+    conn.execute("DELETE FROM txn WHERE account_id=? AND source_file=?", (account_id, source_file))
     n_cash_txn = 0
     other_cash = _other_file_counts(conn, account_id, "CASH", source_file)
     skipped_cash = []

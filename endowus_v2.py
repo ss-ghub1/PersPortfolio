@@ -22,6 +22,8 @@ gate in this project exists to prevent.
 """
 import re
 
+from isin_tools import isin_valid
+
 MONTHS = {m: i for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
 MIN_TEXT_CHARS = 40
@@ -53,22 +55,6 @@ LEDGER_TYPES = [
 ]
 TXN_RECORD_TYPES = ("Investment", "Redemption", "Distribution reinvested",
                     "Distribution received", "Fee")
-
-
-def isin_valid(s):
-    """ISIN shape AND check digit (Luhn over the letter-expanded digits). Shape
-    alone cannot tell letter O from digit 0 - 'IEOOOXNHMJW8' (OCR) has the same
-    shape as 'IE000XNHMJW8' (real). Verified on 102 real ISINs from five
-    independent sources: all pass; every OCR-garbled variant seen fails."""
-    if not s or not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}\d", s):
-        return False
-    total = 0
-    for i, ch in enumerate(reversed("".join(str(int(c, 36)) for c in s))):
-        d = int(ch)
-        if i % 2 == 1:
-            d = d * 2 - 9 if d * 2 > 9 else d * 2
-        total += d
-    return total % 10 == 0
 
 
 def is_v2(pages):
